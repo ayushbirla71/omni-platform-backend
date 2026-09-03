@@ -1,0 +1,1649 @@
+{
+  "info": {
+    "name": "Omni-Platform API",
+    "description": "Covers every implemented feature: auth, channels, webhooks (with real HMAC/secret-token verification), contacts, conversations, flows, deals, campaigns, WhatsApp Tech Provider onboarding, templates, links/QR, search, and media.\n\nSUGGESTED RUN ORDER: 1 Auth -> 2 Channels -> 3 Webhooks -> 4 Contacts -> 5 Conversations -> 6 Flows (then back to folder 2's 'Set Channel's Default Flow', then re-run folder 3 to see the flow engine react) -> 7 Deals -> 8 Campaigns -> 9/10 WhatsApp Onboarding + Templates (optional, needs real Meta credentials or a mock) -> 11 Links -> 12 Search -> 13 Media.\n\nPREREQUISITES: the server running on {{baseUrl}} (default http://localhost:4000), Postgres + Redis at minimum. MongoDB is required for anything touching messages (folders 3, 5's message endpoints, 12). Elasticsearch is required for folder 12. Object storage (MinIO/S3) is required for folder 13. See IMPLEMENTATION_TRACKER.md for which of these were live-tested during development vs. build-verified only.\n\nCollection variables auto-populate as you run requests (token, tenantId, channelIds, flowId, etc.) — run folders roughly in order the first time through.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4000"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "tenantId",
+      "value": ""
+    },
+    {
+      "key": "userId",
+      "value": ""
+    },
+    {
+      "key": "whatsappChannelId",
+      "value": ""
+    },
+    {
+      "key": "telegramChannelId",
+      "value": ""
+    },
+    {
+      "key": "whatsappAppSecret",
+      "value": "test-webhook-secret"
+    },
+    {
+      "key": "telegramWebhookSecret",
+      "value": "test-telegram-secret"
+    },
+    {
+      "key": "contactId",
+      "value": ""
+    },
+    {
+      "key": "conversationId",
+      "value": ""
+    },
+    {
+      "key": "flowId",
+      "value": ""
+    },
+    {
+      "key": "dealId",
+      "value": ""
+    },
+    {
+      "key": "campaignId",
+      "value": ""
+    },
+    {
+      "key": "dripCampaignId",
+      "value": ""
+    },
+    {
+      "key": "embeddedSignupChannelId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Auth",
+      "description": "Run Signup first — it creates a tenant + owner user and captures the JWT into {{token}} automatically for every other request in this collection.",
+      "item": [
+        {
+          "name": "Signup",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/signup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "signup"
+              ]
+            },
+            "description": "Creates a new tenant + owner user. Change the email if you run this more than once — signup fails on a duplicate email.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tenantName\": \"Postman Test Co\",\n  \"email\": \"postman-test@example.com\",\n  \"password\": \"secret123\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.test('Signup succeeded', () => pm.response.code === 201);",
+                  "if (data.token) {",
+                  "  pm.collectionVariables.set('token', data.token);",
+                  "  pm.collectionVariables.set('tenantId', data.tenantId);",
+                  "  pm.collectionVariables.set('userId', data.userId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Use this instead of Signup on subsequent test runs, once the account already exists.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"postman-test@example.com\",\n  \"password\": \"secret123\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.test('Login succeeded', () => pm.response.code === 200);",
+                  "if (data.token) {",
+                  "  pm.collectionVariables.set('token', data.token);",
+                  "  pm.collectionVariables.set('tenantId', data.tenantId);",
+                  "  pm.collectionVariables.set('userId', data.userId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Channels",
+      "description": "Creates channels directly (not via Embedded Signup) so the Webhooks folder has something to test against with a known, matching secret. See folder 9 for the real Tech Provider Embedded Signup flow.",
+      "item": [
+        {
+          "name": "Create WhatsApp Channel",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/channels",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "channels"
+              ]
+            },
+            "description": "credentials.appSecret matches {{whatsappAppSecret}} on purpose — the Webhooks folder signs its test payloads with the same value so signature verification passes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"whatsapp\",\n  \"displayName\": \"Postman Test WhatsApp\",\n  \"credentials\": {\n    \"appSecret\": \"{{whatsappAppSecret}}\",\n    \"phoneNumberId\": \"123456\",\n    \"accessToken\": \"test-token\"\n  }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.test('Channel created', () => pm.response.code === 201);",
+                  "if (data.id) pm.collectionVariables.set('whatsappChannelId', data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Telegram Channel",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/channels",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "channels"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"telegram\",\n  \"displayName\": \"Postman Test Telegram\",\n  \"credentials\": {\n    \"botToken\": \"test-bot-token\",\n    \"webhookSecretToken\": \"{{telegramWebhookSecret}}\"\n  }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.test('Channel created', () => pm.response.code === 201);",
+                  "if (data.id) pm.collectionVariables.set('telegramChannelId', data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Channels",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/channels",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "channels"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Patch Channel (update display name)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/channels/{{whatsappChannelId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "channels",
+                "{{whatsappChannelId}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"displayName\": \"Postman Test WhatsApp (renamed)\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Set Channel's Default Flow",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/channels/{{whatsappChannelId}}/default-flow",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "channels",
+                "{{whatsappChannelId}}",
+                "default-flow"
+              ]
+            },
+            "description": "Run this AFTER folder 6 (Flows) has published a flow and set {{flowId}}. Once set, the Webhooks folder's inbound messages will trigger the flow engine.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"flowId\": \"{{flowId}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 204', () => pm.response.code === 204);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Webhooks (simulate inbound messages)",
+      "description": "Simulates Meta/Telegram delivering a real inbound message. This is what actually creates a contact + conversation + message — run this before folders 4/5 (Contacts/Conversations) or those will be empty. Requires MongoDB reachable (see IMPLEMENTATION_TRACKER.md — message storage lives in Mongo, not Postgres).",
+      "item": [
+        {
+          "name": "WhatsApp Verification Handshake (GET)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/whatsapp/{{whatsappChannelId}}?hub.mode=subscribe&hub.verify_token=change-me&hub.challenge=12345",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "whatsapp",
+                "{{whatsappChannelId}}?hub.mode=subscribe&hub.verify_token=change-me&hub.challenge=12345"
+              ]
+            },
+            "description": "Meta calls this once when you register a webhook URL. hub.verify_token must match WHATSAPP_WEBHOOK_VERIFY_TOKEN in your .env — the default there is 'change-me', matching this request."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Handshake echoes challenge', () => pm.response.code === 200 && pm.response.text() === '12345');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "WhatsApp Inbound Message (POST, signed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/whatsapp/{{whatsappChannelId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "whatsapp",
+                "{{whatsappChannelId}}"
+              ]
+            },
+            "description": "Pre-request script computes a real HMAC-SHA256 signature over the exact body using {{whatsappAppSecret}} — must match the channel's credentials.appSecret from folder 2.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"entry\": [\n    {\n      \"changes\": [\n        {\n          \"value\": {\n            \"contacts\": [\n              {\n                \"profile\": {\n                  \"name\": \"Postman Tester\"\n                }\n              }\n            ],\n            \"messages\": [\n              {\n                \"from\": \"919999999999\",\n                \"type\": \"text\",\n                \"text\": {\n                  \"body\": \"hello from postman\"\n                },\n                \"timestamp\": \"1788343407\"\n              }\n            ]\n          }\n        }\n      ]\n    }\n  ]\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Postman's sandbox includes CryptoJS globally — no import needed.",
+                  "const secret = pm.collectionVariables.get('whatsappAppSecret');",
+                  "const body = pm.request.body.raw;",
+                  "const hash = CryptoJS.HmacSHA256(body, secret).toString(CryptoJS.enc.Hex);",
+                  "pm.request.headers.upsert({ key: 'X-Hub-Signature-256', value: 'sha256=' + hash });"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Webhook accepted', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Telegram Inbound Message (POST)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Telegram-Bot-Api-Secret-Token",
+                "value": "{{telegramWebhookSecret}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/telegram/{{telegramChannelId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks",
+                "telegram",
+                "{{telegramChannelId}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": {\n    \"chat\": {\n      \"id\": 555111\n    },\n    \"from\": {\n      \"first_name\": \"Postman\",\n      \"last_name\": \"Tester\"\n    },\n    \"text\": \"hello from postman via telegram\",\n    \"date\": 1788343407\n  }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Webhook accepted', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Contacts",
+      "description": "Run folder 3 (Webhooks) first — contacts are created from inbound messages, not directly via the API.",
+      "item": [
+        {
+          "name": "List Contacts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/contacts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "contacts"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.code === 200);",
+                  "if (Array.isArray(data) && data.length) pm.collectionVariables.set('contactId', data[0].id);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Conversations",
+      "description": "Run folder 3 (Webhooks) first.",
+      "item": [
+        {
+          "name": "List Conversations",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "conversations"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.code === 200);",
+                  "if (Array.isArray(data) && data.length) pm.collectionVariables.set('conversationId', data[0].id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Conversation Messages",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/{{conversationId}}/messages",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "conversations",
+                "{{conversationId}}",
+                "messages"
+              ]
+            },
+            "description": "Requires MongoDB reachable — messages are stored there, not Postgres."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Send Message in Conversation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/{{conversationId}}/messages",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "conversations",
+                "{{conversationId}}",
+                "messages"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Hi, this is an agent reply sent from Postman\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.code === 201);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Assign Conversation to Agent",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/{{conversationId}}/assign",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "conversations",
+                "{{conversationId}}",
+                "assign"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"agentUserId\": \"{{userId}}\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 204', () => pm.response.code === 204);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6. Flows",
+      "description": "Create → publish a flow here, then go back to folder 2 to set it as the channel's default before re-running folder 3's webhooks to see it react.",
+      "item": [
+        {
+          "name": "Create Flow (draft)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/flows",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "flows"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman test welcome flow\",\n  \"definition\": {\n    \"entryNodeId\": \"n1\",\n    \"nodes\": [\n      {\n        \"id\": \"n1\",\n        \"type\": \"message\",\n        \"text\": \"Hi! Welcome.\",\n        \"next\": \"n2\"\n      },\n      {\n        \"id\": \"n2\",\n        \"type\": \"input\",\n        \"prompt\": \"What is your name?\",\n        \"saveAs\": \"name\",\n        \"next\": \"n3\"\n      },\n      {\n        \"id\": \"n3\",\n        \"type\": \"message\",\n        \"text\": \"Nice to meet you!\",\n        \"next\": \"n4\"\n      },\n      {\n        \"id\": \"n4\",\n        \"type\": \"end\"\n      }\n    ]\n  }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.test('Flow created', () => pm.response.code === 201);",
+                  "if (data.id) pm.collectionVariables.set('flowId', data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Flow Definition (draft only)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/flows/{{flowId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "flows",
+                "{{flowId}}"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"definition\": {\n    \"entryNodeId\": \"n1\",\n    \"nodes\": [\n      {\n        \"id\": \"n1\",\n        \"type\": \"message\",\n        \"text\": \"Hi! Welcome (edited via Postman).\",\n        \"next\": \"n2\"\n      },\n      {\n        \"id\": \"n2\",\n        \"type\": \"end\"\n      }\n    ]\n  }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Publish Flow",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/flows/{{flowId}}/publish",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "flows",
+                "{{flowId}}",
+                "publish"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Flows",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/flows",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "flows"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Flow by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/flows/{{flowId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "flows",
+                "{{flowId}}"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7. Deals",
+      "description": "Run folder 3 (Webhooks) and folder 4 (Contacts) first so {{contactId}} is populated.",
+      "item": [
+        {
+          "name": "Create Deal",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/deals",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "deals"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"contactId\": \"{{contactId}}\",\n  \"title\": \"Postman test deal\",\n  \"stage\": \"new\",\n  \"value\": 5000\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.test('Deal created', () => pm.response.code === 201);",
+                  "if (data.id) pm.collectionVariables.set('dealId', data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Deals",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/deals",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "deals"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Pipeline Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/deals/pipeline-summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "deals",
+                "pipeline-summary"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Deal Stage",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/deals/{{dealId}}/stage",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "deals",
+                "{{dealId}}",
+                "stage"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"stage\": \"contacted\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "8. Campaigns",
+      "description": "Run folder 3+4 first so {{contactId}} is populated.",
+      "item": [
+        {
+          "name": "Create Broadcast Campaign",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/campaigns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "campaigns"
+              ]
+            },
+            "description": "Sending will actually call the WhatsApp adapter's send() against the real (test) credentials — expect this to fail unless credentials.accessToken/phoneNumberId are real or apiBaseUrl is pointed at a mock. That failure is expected and fine for this test pass.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channelId\": \"{{whatsappChannelId}}\",\n  \"name\": \"Postman test broadcast\",\n  \"type\": \"broadcast\",\n  \"contactIds\": [\n    \"{{contactId}}\"\n  ],\n  \"definition\": {\n    \"text\": \"Hi {{name}}, this is a test broadcast from Postman!\"\n  }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.test('Campaign created', () => pm.response.code === 201);",
+                  "if (data.id) pm.collectionVariables.set('campaignId', data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Send Broadcast Campaign",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/campaigns/{{campaignId}}/send",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "campaigns",
+                "{{campaignId}}",
+                "send"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Drip Campaign",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/campaigns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "campaigns"
+              ]
+            },
+            "description": "Drip steps send automatically via the scheduler in src/index.ts (see DRIP_POLL_INTERVAL_MS) — no manual 'send' call, unlike broadcasts.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channelId\": \"{{whatsappChannelId}}\",\n  \"name\": \"Postman test drip\",\n  \"type\": \"drip\",\n  \"contactIds\": [\n    \"{{contactId}}\"\n  ],\n  \"definition\": {\n    \"steps\": [\n      {\n        \"delayHours\": 0,\n        \"text\": \"Welcome {{name}}!\"\n      },\n      {\n        \"delayHours\": 24,\n        \"text\": \"Checking in, {{name}}\"\n      }\n    ]\n  }\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.test('Drip campaign created', () => pm.response.code === 201);",
+                  "if (data.id) pm.collectionVariables.set('dripCampaignId', data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Campaigns",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/campaigns",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "campaigns"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Campaign by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/campaigns/{{campaignId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "campaigns",
+                "{{campaignId}}"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "9. WhatsApp Onboarding (Tech Provider / Embedded Signup)",
+      "description": "Optional — requires either real META_APP_ID/META_APP_SECRET configured against Meta, or META_GRAPH_API_BASE_URL pointed at a local mock (see IMPLEMENTATION_TRACKER.md for how this was tested during development). The /callback request will fail against a default .env with no real Meta app configured — that's expected, not a bug.",
+      "item": [
+        {
+          "name": "Get Embedded Signup Config",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/whatsapp-onboarding/config",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "whatsapp-onboarding",
+                "config"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Onboarding Capacity",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/whatsapp-onboarding/capacity",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "whatsapp-onboarding",
+                "capacity"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Complete Embedded Signup (callback)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/whatsapp-onboarding/callback",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "whatsapp-onboarding",
+                "callback"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"fake-auth-code\",\n  \"wabaId\": \"waba_postman_test\",\n  \"phoneNumberId\": \"phone_postman_test\",\n  \"displayName\": \"Postman Embedded Signup Test\"\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (pm.response.code === 201 && data.id) pm.collectionVariables.set('embeddedSignupChannelId', data.id);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "10. Templates",
+      "description": "Requires a channel with a real wabaId — i.e. one onboarded via folder 9, not the manually-created channel from folder 2. Uses {{embeddedSignupChannelId}}.",
+      "item": [
+        {
+          "name": "List Templates",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/channels/{{embeddedSignupChannelId}}/templates",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "channels",
+                "{{embeddedSignupChannelId}}",
+                "templates"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Template",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/channels/{{embeddedSignupChannelId}}/templates",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "channels",
+                "{{embeddedSignupChannelId}}",
+                "templates"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"postman_test_template\",\n  \"language\": \"en_US\",\n  \"category\": \"UTILITY\",\n  \"components\": [\n    {\n      \"type\": \"BODY\",\n      \"text\": \"Your order {{1}} has shipped\"\n    }\n  ]\n}"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.code === 201);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "11. Links (QR / deep link)",
+      "description": "",
+      "item": [
+        {
+          "name": "Get Deep Link + QR Code",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/channels/{{whatsappChannelId}}/deep-link?text=Hi%20there",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "channels",
+                "{{whatsappChannelId}}",
+                "deep-link?text=Hi%20there"
+              ]
+            },
+            "description": "credentials.businessPhoneNumber must be set on the channel for WhatsApp deep links to build — the channel created in folder 2 doesn't set it, so this may 400. Add businessPhoneNumber via the Patch Channel request first if you want to test this end to end."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200 or documented 400', () => [200, 400].includes(pm.response.code));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "12. Search",
+      "description": "Requires Elasticsearch reachable (see IMPLEMENTATION_TRACKER.md — not live-tested during development, only build-verified). Run folder 3 first so there's something to find.",
+      "item": [
+        {
+          "name": "Search",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/search?q=hello",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "search?q=hello"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "13. Media",
+      "description": "Requires object storage reachable (MinIO via docker-compose, or real S3) AND an object that actually exists at the given key — this collection has no way to create real WhatsApp/Telegram media via a mock, so this request is illustrative and will likely 404 unless you've received a real media message first.",
+      "item": [
+        {
+          "name": "Get Media Download URL",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/media/download-url?key={{tenantId}}/{{conversationId}}/example.jpg",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "media",
+                "download-url?key={{tenantId}}",
+                "{{conversationId}}",
+                "example.jpg"
+              ]
+            },
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Request completed', () => pm.response.code !== undefined);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
