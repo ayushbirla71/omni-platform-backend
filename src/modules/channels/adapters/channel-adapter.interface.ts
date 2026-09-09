@@ -23,6 +23,8 @@ export interface OutboundMessage {
   templateName?: string;
   templateLanguage?: string;
   templateParams?: Record<string, string>;
+  headerType?: "TEXT" | "IMAGE" | "DOCUMENT" | "VIDEO";
+  headerValue?: string;
 }
 
 export interface MessageStatusUpdate {

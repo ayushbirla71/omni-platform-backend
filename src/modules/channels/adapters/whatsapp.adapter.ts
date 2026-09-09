@@ -212,23 +212,53 @@ function buildOutboundBody(message: OutboundMessage) {
     return { ...base, type: "text", text: { body: message.text } };
   }
   if (message.type === "template") {
+    const components: any[] = [];
+
+    // Header component
+    if (message.headerType && message.headerValue) {
+      if (message.headerType === "TEXT") {
+        components.push({
+          type: "header",
+          parameters: [{ type: "text", text: message.headerValue }],
+        });
+      } else if (["IMAGE", "VIDEO", "DOCUMENT"].includes(message.headerType)) {
+        components.push({
+          type: "header",
+          parameters: [
+            {
+              type: message.headerType.toLowerCase(),
+              [message.headerType.toLowerCase()]: { link: message.headerValue },
+            },
+          ],
+        });
+      }
+    }
+
+    // Body parameters
+    if (message.templateParams && Object.keys(message.templateParams).length > 0) {
+      const paramKeys = Object.keys(message.templateParams).sort((a, b) => {
+        const numA = Number(a);
+        const numB = Number(b);
+        if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+        return a.localeCompare(b);
+      });
+
+      components.push({
+        type: "body",
+        parameters: paramKeys.map((k) => ({
+          type: "text",
+          text: message.templateParams![k],
+        })),
+      });
+    }
+
     return {
       ...base,
       type: "template",
       template: {
         name: message.templateName,
         language: { code: message.templateLanguage || "en" },
-        components: message.templateParams
-          ? [
-              {
-                type: "body",
-                parameters: Object.values(message.templateParams).map((v) => ({
-                  type: "text",
-                  text: v,
-                })),
-              },
-            ]
-          : [],
+        components,
       },
     };
   }

@@ -6,6 +6,8 @@ export interface OutboundFlowMessage {
   templateName?: string;
   templateLanguage?: string;
   templateParams?: Record<string, string>;
+  headerType?: "TEXT" | "IMAGE" | "DOCUMENT" | "VIDEO";
+  headerValue?: string;
   nodeId?: string;
   waitForDelivery?: boolean;
 }
@@ -28,10 +30,21 @@ function getNode(def: FlowDefinition, id: string): FlowNode | undefined {
   return def.nodes.find((n) => n.id === id);
 }
 
-function interpolate(template: string, vars: Record<string, any>): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (_match, key) =>
-    vars[key] !== undefined && vars[key] !== null ? String(vars[key]) : ""
-  );
+/**
+ * Variable interpolation with support for nested object paths (e.g. {{ contact.name }})
+ * and whitespace tolerance.
+ */
+export function interpolate(template: string, vars: Record<string, any>): string {
+  if (!template || typeof template !== "string") return "";
+  return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_match, path) => {
+    const parts = path.split(".");
+    let curr: any = vars;
+    for (const part of parts) {
+      if (curr === undefined || curr === null) return "";
+      curr = curr[part];
+    }
+    return curr !== undefined && curr !== null ? String(curr) : "";
+  });
 }
 
 function convertDurationToSeconds(duration: number, unit?: string): number {
@@ -49,14 +62,35 @@ function convertDurationToSeconds(duration: number, unit?: string): number {
 }
 
 /**
+ * Checks if a node is actively configured to await delivery status receipts.
+ */
+function isDeliveryWaitingNode(node: FlowNode): boolean {
+  if (node.type === "message" || node.type === "template") {
+    return Boolean(
+      node.waitForDelivery ||
+      node.onDelivered ||
+      node.onFailed ||
+      node.ports?.some((p) => p.id === "delivered" || p.id === "failed")
+    );
+  }
+  return false;
+}
+
+/**
  * Resolves the next node pointer from ports, status hooks, or default next.
  */
 function resolvePortNext(node: FlowNode, portId: "continue" | "delivered" | "failed" | string): string | null {
-  if (portId === "delivered" && (node as any).onDelivered) {
-    return (node as any).onDelivered;
+  if (portId === "delivered") {
+    if ((node as any).onDelivered) return (node as any).onDelivered;
+    const foundPort = (node as any).ports?.find((p: any) => p.id === "delivered");
+    if (foundPort?.next) return foundPort.next;
+    return (node as any).next ?? null;
   }
-  if (portId === "failed" && (node as any).onFailed) {
-    return (node as any).onFailed;
+  if (portId === "failed") {
+    if ((node as any).onFailed) return (node as any).onFailed;
+    const foundPort = (node as any).ports?.find((p: any) => p.id === "failed");
+    if (foundPort?.next) return foundPort.next;
+    return null; // Do not fallback to success next on failure
   }
   const foundPort = (node as any).ports?.find((p: any) => p.id === portId);
   if (foundPort?.next) {
@@ -69,12 +103,12 @@ function resolvePortNext(node: FlowNode, portId: "continue" | "delivered" | "fai
  * Pure state machine engine. Advances execution until an async pause
  * (input node, delivery confirmation wait, wait timer, or completion).
  */
-export function advanceFlow(
+export async function advanceFlow(
   def: FlowDefinition,
   state: { currentNodeId: string | null; variables: Record<string, any> },
   incomingText?: string,
   resumeAtNodeId?: string
-): AdvanceResult {
+): Promise<AdvanceResult> {
   let nodeId: string | null = resumeAtNodeId ?? state.currentNodeId ?? def.entryNodeId;
   const variables = { ...state.variables };
   const outboundMessages: OutboundFlowMessage[] = [];
@@ -89,10 +123,7 @@ export function advanceFlow(
     switch (node.type) {
       case "message": {
         const interpolatedText = interpolate(node.text, variables);
-        const shouldWaitForDelivery = Boolean(
-          node.waitForDelivery || node.onDelivered || node.onFailed ||
-          node.ports?.some((p) => p.id === "delivered" || p.id === "failed")
-        );
+        const shouldWaitForDelivery = isDeliveryWaitingNode(node);
 
         outboundMessages.push({
           type: "text",
@@ -160,16 +191,16 @@ export function advanceFlow(
           }
         }
 
-        const shouldWaitForDelivery = Boolean(
-          node.waitForDelivery || node.onDelivered || node.onFailed ||
-          node.ports?.some((p) => p.id === "delivered" || p.id === "failed")
-        );
+        const interpolatedHeaderValue = node.headerValue ? interpolate(node.headerValue, variables) : undefined;
+        const shouldWaitForDelivery = isDeliveryWaitingNode(node);
 
         outboundMessages.push({
           type: "template",
           templateName: node.templateName,
           templateLanguage: node.language || "en",
           templateParams: interpolatedParams,
+          headerType: node.headerType,
+          headerValue: interpolatedHeaderValue,
           nodeId: node.id,
           waitForDelivery: shouldWaitForDelivery,
         });
@@ -215,14 +246,42 @@ export function advanceFlow(
 
       case "condition": {
         const value = variables[node.variable];
-        const branch = node.branches.find((b) => b.equals === String(value));
+        const branch = node.branches?.find((b) => b.equals === String(value));
         nodeId = branch?.next ?? node.default ?? null;
         continue;
       }
 
       case "action": {
-        console.log(`[flow-engine] webhook action dispatched: ${node.url}`);
-        nodeId = (node as any).onSuccess || resolvePortNext(node, "continue");
+        if (node.action === "webhook" && node.url) {
+          const interpolatedUrl = interpolate(node.url, variables);
+          try {
+            console.log(`[flow-engine] webhook action dispatched: ${interpolatedUrl}`);
+            const response = await fetch(interpolatedUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ variables }),
+              signal: AbortSignal.timeout(5000),
+            });
+            if (response.ok) {
+              try {
+                const data = await response.json();
+                if (data && typeof data === "object") {
+                  Object.assign(variables, data);
+                }
+              } catch {
+                // non-JSON responses are ignored
+              }
+              nodeId = node.onSuccess || resolvePortNext(node, "continue");
+            } else {
+              nodeId = node.onFailure || resolvePortNext(node, "continue");
+            }
+          } catch (err) {
+            console.warn(`[flow-engine] webhook action request failed:`, err);
+            nodeId = node.onFailure || resolvePortNext(node, "continue");
+          }
+        } else {
+          nodeId = resolvePortNext(node, "continue");
+        }
         continue;
       }
 
@@ -243,12 +302,12 @@ export function advanceFlow(
 /**
  * Resumes execution when a WhatsApp delivery status receipt arrives.
  */
-export function resumeFlowOnDeliveryStatus(
+export async function resumeFlowOnDeliveryStatus(
   def: FlowDefinition,
   state: { currentNodeId: string | null; variables: Record<string, any> },
   deliveryStatus: "delivered" | "read" | "failed",
   errorDetails?: { code?: string; message?: string }
-): AdvanceResult {
+): Promise<AdvanceResult> {
   if (!state.currentNodeId) {
     return { nextNodeId: null, variables: state.variables, status: "completed", outboundMessages: [] };
   }
@@ -256,6 +315,12 @@ export function resumeFlowOnDeliveryStatus(
   const node = getNode(def, state.currentNodeId);
   if (!node) {
     return { nextNodeId: null, variables: state.variables, status: "completed", outboundMessages: [] };
+  }
+
+  // Guard: If the current node is not waiting for delivery (e.g. paused at input node),
+  // do not let delivery callbacks advance or interrupt the waiting state.
+  if (!isDeliveryWaitingNode(node)) {
+    return { nextNodeId: state.currentNodeId, variables: state.variables, status: "running", outboundMessages: [] };
   }
 
   const variables = { ...state.variables };

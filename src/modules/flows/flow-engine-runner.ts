@@ -2,6 +2,7 @@ import { withLock } from "../../db/redis";
 import { sendOutboundMessage } from "../messages/messages.service";
 import {
   getActiveFlowRun,
+  getLatestFlowRun,
   createFlowRun,
   updateFlowRun,
   getFlow,
@@ -26,6 +27,13 @@ export async function runFlowForConversation(params: {
     let flowRun = await getActiveFlowRun(conversationId);
 
     if (!flowRun) {
+      // Check if conversation was handed off to a human agent
+      const latestRun = await getLatestFlowRun(conversationId);
+      if (latestRun && latestRun.status === "handed_off") {
+        console.log(`[flow-engine] conversation ${conversationId} is handed off to agent — skipping flow trigger`);
+        return;
+      }
+
       if (!defaultFlowId) return; // no flow configured for this channel
       flowRun = await createFlowRun({ conversationId, flowId: defaultFlowId });
     }
@@ -36,7 +44,7 @@ export async function runFlowForConversation(params: {
       return;
     }
 
-    const advance = advanceFlow(
+    const advance = await advanceFlow(
       flow.definition,
       { currentNodeId: flowRun.current_node_id, variables: flowRun.variables },
       incomingText,
@@ -58,6 +66,8 @@ export async function runFlowForConversation(params: {
           templateName: msg.templateName,
           templateLanguage: msg.templateLanguage,
           templateParams: msg.templateParams,
+          headerType: msg.headerType,
+          headerValue: msg.headerValue,
         });
         lastProviderMessageId = sent.provider_message_id;
       }
@@ -119,7 +129,7 @@ export async function handleDeliveryStatusCallback(params: {
 
     const normalizedStatus = status === "read" ? "delivered" : status;
 
-    const advance = resumeFlowOnDeliveryStatus(
+    const advance = await resumeFlowOnDeliveryStatus(
       flow.definition,
       { currentNodeId: flowRun.current_node_id, variables: flowRun.variables },
       normalizedStatus,

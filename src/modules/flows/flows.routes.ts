@@ -7,6 +7,7 @@ import {
   publishFlow,
   getFlow,
   listFlows,
+  deleteFlow,
 } from "./flows.service";
 import { validateFlowDefinition, FlowDefinition } from "./flows.types";
 
@@ -65,11 +66,19 @@ flowsRouter.put(
 
     const flow = await updateFlowDefinition(req.auth!.tenantId, req.params.id, definition);
     if (!flow) {
-      return res
-        .status(409)
-        .json({ error: "Flow not found, or not editable (only drafts can be edited)" });
+      return res.status(404).json({ error: "Flow not found" });
     }
     res.json(flow);
+  })
+);
+
+flowsRouter.delete(
+  "/:id",
+  requireRole("owner", "admin"),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const deleted = await deleteFlow(req.auth!.tenantId, req.params.id);
+    if (!deleted) return res.sendStatus(404);
+    res.json({ success: true });
   })
 );
 

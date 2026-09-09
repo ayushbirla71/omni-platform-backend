@@ -85,6 +85,8 @@ export type TemplateNode = {
   templateName: string;
   language?: string; // e.g. "en", "en_US" (defaults to "en")
   templateParams?: Record<string, string>; // e.g. { "1": "{{userName}}", "2": "Order #123" }
+  headerType?: "TEXT" | "IMAGE" | "DOCUMENT" | "VIDEO";
+  headerValue?: string; // static URL or {{variable}} or text
   buttons?: TemplateButtonAction[];
   waitForDelivery?: boolean;
   onDelivered?: string;
@@ -140,12 +142,29 @@ export interface FlowDefinition {
 
 export function validateFlowDefinition(def: FlowDefinition): string[] {
   const errors: string[] = [];
-  const ids = new Set(def.nodes.map((n) => n.id));
 
-  if (!def.entryNodeId) errors.push("entryNodeId is required");
-  else if (!ids.has(def.entryNodeId)) errors.push(`entryNodeId "${def.entryNodeId}" is not a node in this flow`);
+  if (!def || typeof def !== "object") {
+    return ["Flow definition must be a valid object"];
+  }
+
+  if (!Array.isArray(def.nodes) || def.nodes.length === 0) {
+    return ["Flow definition must contain at least one node"];
+  }
+
+  const ids = new Set(def.nodes.map((n) => n?.id).filter(Boolean));
+
+  if (!def.entryNodeId) {
+    errors.push("entryNodeId is required");
+  } else if (!ids.has(def.entryNodeId)) {
+    errors.push(`entryNodeId "${def.entryNodeId}" is not a node in this flow`);
+  }
 
   for (const node of def.nodes) {
+    if (!node || typeof node !== "object" || !node.id) {
+      errors.push("Flow contains an invalid node without an id");
+      continue;
+    }
+
     const checkNext = (next?: string) => {
       if (next && !ids.has(next)) errors.push(`Node "${node.id}" points to unknown node "${next}"`);
     };
@@ -165,7 +184,8 @@ export function validateFlowDefinition(def: FlowDefinition): string[] {
         node.ports?.forEach((p) => checkNext(p.next));
         break;
       case "condition":
-        if (!node.branches?.length && !node.default) errors.push(`Node "${node.id}" (condition) has no branches`);
+        if (!node.variable) errors.push(`Node "${node.id}" (condition) is missing variable`);
+        if (!node.branches?.length && !node.default) errors.push(`Node "${node.id}" (condition) has no branches or default`);
         node.branches?.forEach((b) => checkNext(b.next));
         checkNext(node.default);
         break;
@@ -195,6 +215,9 @@ export function validateFlowDefinition(def: FlowDefinition): string[] {
         break;
       case "handoff":
       case "end":
+        break;
+      default:
+        errors.push(`Node "${(node as any).id}" has an unknown type "${(node as any).type}"`);
         break;
     }
   }

@@ -40,14 +40,19 @@ export async function updateFlowDefinition(
   flowId: string,
   definition: FlowDefinition
 ): Promise<Flow | null> {
-  // Only draft flows can be edited in place — a published flow may already
-  // have active flow_runs mid-execution against it, so mutating it under
-  // them would corrupt conversations in progress.
   return queryOne<Flow>(
     `UPDATE flows SET definition = $1, updated_at = now()
-     WHERE id = $2 AND tenant_id = $3 AND status = 'draft' RETURNING *`,
+     WHERE id = $2 AND tenant_id = $3 RETURNING *`,
     [definition, flowId, tenantId]
   );
+}
+
+export async function deleteFlow(tenantId: string, flowId: string): Promise<boolean> {
+  const res = await query(
+    `DELETE FROM flows WHERE id = $1 AND tenant_id = $2 RETURNING id`,
+    [flowId, tenantId]
+  );
+  return res.length > 0;
 }
 
 export async function publishFlow(tenantId: string, flowId: string): Promise<Flow | null> {
@@ -71,6 +76,14 @@ export async function listFlows(tenantId: string): Promise<Flow[]> {
 export async function getActiveFlowRun(conversationId: string): Promise<FlowRun | null> {
   return queryOne<FlowRun>(
     `SELECT * FROM flow_runs WHERE conversation_id = $1 AND status = 'running'
+     ORDER BY created_at DESC LIMIT 1`,
+    [conversationId]
+  );
+}
+
+export async function getLatestFlowRun(conversationId: string): Promise<FlowRun | null> {
+  return queryOne<FlowRun>(
+    `SELECT * FROM flow_runs WHERE conversation_id = $1
      ORDER BY created_at DESC LIMIT 1`,
     [conversationId]
   );

@@ -128,8 +128,10 @@ export async function sendOutboundMessage(params: {
   templateName?: string;
   templateLanguage?: string;
   templateParams?: Record<string, string>;
+  headerType?: "TEXT" | "IMAGE" | "DOCUMENT" | "VIDEO";
+  headerValue?: string;
 }): Promise<Message> {
-  const { tenantId, conversationId, senderUserId, text, type = "text", templateName, templateLanguage, templateParams } = params;
+  const { tenantId, conversationId, senderUserId, text, type = "text", templateName, templateLanguage, templateParams, headerType, headerValue } = params;
 
   const conversation = await queryOne<{ channel_id: string; contact_external_id: string }>(
     `SELECT c.channel_id, ct.external_id AS contact_external_id
@@ -157,6 +159,8 @@ export async function sendOutboundMessage(params: {
         templateName,
         templateLanguage,
         templateParams,
+        headerType,
+        headerValue,
       },
       channel.credentials
     );
@@ -178,7 +182,7 @@ export async function sendOutboundMessage(params: {
     direction: "outbound",
     type: type === "template" ? "template" : "text",
     content: type === "template"
-      ? { templateName, templateLanguage, templateParams }
+      ? { templateName, templateLanguage, templateParams, headerType, headerValue }
       : { text },
     senderUserId: senderUserId || null,
     sentAt: new Date(),
