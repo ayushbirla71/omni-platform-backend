@@ -16,15 +16,26 @@ import { indexMessage } from "../search/search.service";
  * messages is the app's responsibility, not the database's.
  */
 export interface Message {
+  _id?: string;
   id: string;
   tenant_id: string;
+  tenantId?: string;
   conversation_id: string;
+  conversationId?: string;
   direction: "inbound" | "outbound";
   type: string;
+  text?: string;
   content: Record<string, any>;
   sender_user_id: string | null;
+  senderUserId?: string | null;
+  senderType?: "customer" | "agent" | "bot" | "system";
   sent_at: string;
+  sentAt?: string;
+  createdAt?: string;
+  created_at?: string;
   provider_message_id?: string;
+  providerMessageId?: string;
+  status?: "received" | "sent" | "delivered" | "read" | "failed";
 }
 
 interface MessageDoc {
@@ -53,16 +64,38 @@ interface MessageStatusEventDoc {
 }
 
 function toMessage(doc: MessageDoc): Message {
+  const text =
+    doc.content?.text ||
+    (typeof doc.content === "string" ? doc.content : "") ||
+    (doc.type === "template" ? `[Template: ${doc.content?.templateName || ""}]` : "") ||
+    (doc.type === "image" ? "[Image]" : "") ||
+    (doc.type === "document" ? "[Document]" : "") ||
+    (doc.type === "audio" ? "[Audio]" : "") ||
+    "";
+
+  const isoDate = doc.sentAt ? new Date(doc.sentAt).toISOString() : new Date().toISOString();
+
   return {
+    _id: doc.id,
     id: doc.id,
     tenant_id: doc.tenantId,
+    tenantId: doc.tenantId,
     conversation_id: doc.conversationId,
+    conversationId: doc.conversationId,
     direction: doc.direction,
     type: doc.type,
+    text,
     content: doc.content,
     sender_user_id: doc.senderUserId,
-    sent_at: doc.sentAt.toISOString(),
+    senderUserId: doc.senderUserId,
+    senderType: doc.direction === "inbound" ? "customer" : (doc.senderUserId ? "agent" : "bot"),
+    sent_at: isoDate,
+    sentAt: isoDate,
+    createdAt: isoDate,
+    created_at: isoDate,
     provider_message_id: doc.providerMessageId,
+    providerMessageId: doc.providerMessageId,
+    status: doc.latestStatus || (doc.direction === "inbound" ? "received" : "sent"),
   };
 }
 

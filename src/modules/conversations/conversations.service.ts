@@ -42,17 +42,100 @@ export async function touchLastMessageAt(conversationId: string) {
 export async function listConversations(
   tenantId: string,
   status?: string
-): Promise<Conversation[]> {
+): Promise<any[]> {
+  const conditions = ["c.tenant_id = $1"];
+  const params: any[] = [tenantId];
+
   if (status) {
-    return query<Conversation>(
-      "SELECT * FROM conversations WHERE tenant_id = $1 AND status = $2 ORDER BY last_message_at DESC NULLS LAST",
-      [tenantId, status]
-    );
+    params.push(status);
+    conditions.push(`c.status = $${params.length}`);
   }
-  return query<Conversation>(
-    "SELECT * FROM conversations WHERE tenant_id = $1 ORDER BY last_message_at DESC NULLS LAST",
-    [tenantId]
-  );
+
+  const sql = `
+    SELECT
+      c.id,
+      c.tenant_id,
+      c.contact_id,
+      c.channel_id,
+      c.status,
+      c.assigned_agent_id,
+      c.last_message_at,
+      c.created_at,
+      ct.name AS contact_name,
+      ct.external_id AS contact_external_id,
+      ch.type AS channel_type,
+      ch.display_name AS channel_display_name
+    FROM conversations c
+    LEFT JOIN contacts ct ON ct.id = c.contact_id
+    LEFT JOIN channels ch ON ch.id = c.channel_id
+    WHERE ${conditions.join(" AND ")}
+    ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC
+  `;
+
+  const rows = await query<any>(sql, params);
+  if (rows.length === 0) return [];
+
+  // Fetch latest message text from MongoDB for each conversation
+  const convIds = rows.map((r) => r.id);
+  const latestMessageMap: Record<string, string> = {};
+
+  try {
+    const { getMongoDb } = await import("../../db/mongo");
+    const db = await getMongoDb();
+    const messagesCol = db.collection("messages");
+
+    const latestDocs = await messagesCol
+      .aggregate([
+        { $match: { conversationId: { $in: convIds } } },
+        { $sort: { sentAt: -1 } },
+        {
+          $group: {
+            _id: "$conversationId",
+            content: { $first: "$content" },
+            type: { $first: "$type" },
+          },
+        },
+      ])
+      .toArray();
+
+    for (const doc of latestDocs) {
+      const text =
+        doc.content?.text ||
+        (typeof doc.content === "string" ? doc.content : "") ||
+        (doc.type === "template" ? `[Template: ${doc.content?.templateName || ""}]` : "") ||
+        (doc.type ? `[${doc.type}]` : "");
+      latestMessageMap[doc._id] = text;
+    }
+  } catch (err) {
+    // Non-fatal MongoDB aggregation fallback
+  }
+
+  return rows.map((r) => ({
+    id: r.id,
+    tenantId: r.tenant_id,
+    tenant_id: r.tenant_id,
+    contactId: r.contact_id,
+    contact_id: r.contact_id,
+    channelId: r.channel_id,
+    channel_id: r.channel_id,
+    status: r.status,
+    assignedAgentUserId: r.assigned_agent_id,
+    assigned_agent_id: r.assigned_agent_id,
+    lastMessageAt: r.last_message_at ? new Date(r.last_message_at).toISOString() : null,
+    last_message_at: r.last_message_at ? new Date(r.last_message_at).toISOString() : null,
+    createdAt: r.created_at ? new Date(r.created_at).toISOString() : null,
+    created_at: r.created_at ? new Date(r.created_at).toISOString() : null,
+    contactName: r.contact_name || null,
+    contact_name: r.contact_name || null,
+    contactExternalId: r.contact_external_id || null,
+    contact_external_id: r.contact_external_id || null,
+    channelType: r.channel_type || "whatsapp",
+    channel_type: r.channel_type || "whatsapp",
+    channelDisplayName: r.channel_display_name || null,
+    channel_display_name: r.channel_display_name || null,
+    lastMessageText: latestMessageMap[r.id] || "",
+    last_message_text: latestMessageMap[r.id] || "",
+  }));
 }
 
 export async function assignAgent(

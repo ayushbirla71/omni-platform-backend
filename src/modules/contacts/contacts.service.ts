@@ -71,14 +71,26 @@ export async function findOrCreateContact(params: {
   );
 
   if (existing) {
+    let shouldUpdate = false;
+    let newName = existing.name;
+    let newAttributes = existing.attributes || {};
+
+    if (name && name.trim() && !existing.name) {
+      newName = name.trim();
+      shouldUpdate = true;
+    }
+
     if (tags && tags.length > 0) {
       const existingTags = existing.attributes?.tags || [];
       const mergedTags = normalizeTags([...existingTags, ...tags]);
-      const updatedAttributes = { ...existing.attributes, tags: mergedTags, ...attributes };
+      newAttributes = { ...newAttributes, tags: mergedTags, ...attributes };
+      shouldUpdate = true;
+    }
 
+    if (shouldUpdate) {
       const updated = await queryOne<Contact>(
-        "UPDATE contacts SET attributes = $1 WHERE id = $2 RETURNING *",
-        [updatedAttributes, existing.id]
+        "UPDATE contacts SET name = $1, attributes = $2 WHERE id = $3 RETURNING *",
+        [newName, newAttributes, existing.id]
       );
       return updated || existing;
     }
