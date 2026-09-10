@@ -25,6 +25,8 @@ import { systemRouter } from "./modules/system/system.routes";
 import { productsRouter } from "./modules/commerce/products.routes";
 import { ordersRouter } from "./modules/commerce/orders.routes";
 import { paymentsRouter, paymentWebhooksRouter } from "./modules/commerce/payments.routes";
+import { knowledgeBaseRouter } from "./modules/ai/knowledge-base.routes";
+import { aiRouter } from "./modules/ai/ai.routes";
 import { ensureMediaBucketExists } from "./db/object-storage";
 import { ensureSearchIndices } from "./db/elasticsearch";
 
@@ -74,6 +76,8 @@ app.use("/api/system", systemRouter);
 app.use("/api/products", productsRouter);
 app.use("/api/orders", ordersRouter);
 app.use("/api/payments", paymentsRouter);
+app.use("/api/knowledge-bases", knowledgeBaseRouter);
+app.use("/api/ai", aiRouter);
 app.use("/webhooks/payments", paymentWebhooksRouter);
 app.use("/webhooks", webhooksRouter);
 

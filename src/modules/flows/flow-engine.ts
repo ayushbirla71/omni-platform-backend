@@ -1,4 +1,6 @@
-import { FlowDefinition, FlowNode, WaitNode } from "./flows.types";
+import { FlowDefinition, FlowNode, WaitNode, AIAgentNode, IntentRouterNode } from "./flows.types";
+import { RAGService } from "../ai/rag.service";
+import { CopilotService } from "../ai/copilot.service";
 
 export interface OutboundFlowMessage {
   type: "text" | "template";
@@ -107,10 +109,14 @@ export async function advanceFlow(
   def: FlowDefinition,
   state: { currentNodeId: string | null; variables: Record<string, any> },
   incomingText?: string,
-  resumeAtNodeId?: string
+  resumeAtNodeId?: string,
+  context?: { tenantId?: string; conversationId?: string }
 ): Promise<AdvanceResult> {
   let nodeId: string | null = resumeAtNodeId ?? state.currentNodeId ?? def.entryNodeId;
   const variables = { ...state.variables };
+  if (incomingText !== undefined) {
+    variables["last_message"] = incomingText;
+  }
   const outboundMessages: OutboundFlowMessage[] = [];
   let pendingReply = incomingText;
 
@@ -281,6 +287,91 @@ export async function advanceFlow(
           }
         } else {
           nodeId = resolvePortNext(node, "continue");
+        }
+        continue;
+      }
+
+      case "ai_agent": {
+        const queryVar = (node as AIAgentNode).queryVariable;
+        const userQuery = queryVar
+          ? String(variables[queryVar] ?? "")
+          : String(incomingText ?? variables["last_message"] ?? variables["query"] ?? "");
+
+        if (context?.tenantId && (node as AIAgentNode).knowledgeBaseId && userQuery.trim()) {
+          try {
+            const interpolatedQuery = interpolate(userQuery, variables);
+            const customPrompt = (node as AIAgentNode).prompt
+              ? interpolate((node as AIAgentNode).prompt!, variables)
+              : undefined;
+
+            const ragResult = await RAGService.queryKnowledgeBase({
+              tenantId: context.tenantId,
+              knowledgeBaseId: (node as AIAgentNode).knowledgeBaseId,
+              query: interpolatedQuery,
+              conversationId: context.conversationId,
+              customSystemPrompt: customPrompt,
+            });
+
+            const saveKey = (node as AIAgentNode).saveResponseAs || "ai_response";
+            variables[saveKey] = ragResult.answer;
+            variables[`${saveKey}_confidence`] = ragResult.confidence;
+
+            if ((node as AIAgentNode).sendImmediately !== false && ragResult.answer) {
+              outboundMessages.push({
+                type: "text",
+                text: ragResult.answer,
+                nodeId: node.id,
+              });
+            }
+
+            const threshold = (node as AIAgentNode).fallbackThreshold ?? 0.2;
+            if (ragResult.confidence < threshold && (node as AIAgentNode).onFallback) {
+              nodeId = (node as AIAgentNode).onFallback!;
+            } else {
+              nodeId = resolvePortNext(node, "continue");
+            }
+          } catch (err) {
+            console.error(`[flow-engine] AI Agent node ${node.id} execution failed:`, err);
+            nodeId = (node as AIAgentNode).onFallback || resolvePortNext(node, "continue");
+          }
+        } else {
+          nodeId = (node as AIAgentNode).onFallback || resolvePortNext(node, "continue");
+        }
+        continue;
+      }
+
+      case "intent_router": {
+        const inputVar = (node as IntentRouterNode).inputVariable;
+        const textToClassify = inputVar
+          ? String(variables[inputVar] ?? "")
+          : String(incomingText ?? variables["last_message"] ?? "");
+
+        if (context?.tenantId && textToClassify.trim()) {
+          try {
+            const interpolatedText = interpolate(textToClassify, variables);
+            const classification = await CopilotService.classifyIntentAndSentiment(
+              context.tenantId,
+              interpolatedText
+            );
+
+            const saveIntentKey = (node as IntentRouterNode).saveIntentAs || "detected_intent";
+            const saveSentimentKey = (node as IntentRouterNode).saveSentimentAs || "detected_sentiment";
+            variables[saveIntentKey] = classification.intent;
+            variables[saveSentimentKey] = classification.sentiment;
+            variables[`${saveIntentKey}_confidence`] = classification.confidence;
+
+            const branches = (node as IntentRouterNode).branches || [];
+            const matchedBranch = branches.find(
+              (b) => b.intent.toLowerCase() === classification.intent.toLowerCase()
+            );
+
+            nodeId = matchedBranch?.next ?? (node as IntentRouterNode).default ?? resolvePortNext(node, "continue");
+          } catch (err) {
+            console.error(`[flow-engine] Intent Router node ${node.id} execution failed:`, err);
+            nodeId = (node as IntentRouterNode).default ?? resolvePortNext(node, "continue");
+          }
+        } else {
+          nodeId = (node as IntentRouterNode).default ?? resolvePortNext(node, "continue");
         }
         continue;
       }

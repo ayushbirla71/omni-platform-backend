@@ -48,7 +48,8 @@ export async function runFlowForConversation(params: {
       flow.definition,
       { currentNodeId: flowRun.current_node_id, variables: flowRun.variables },
       incomingText,
-      resumeAtNodeId
+      resumeAtNodeId,
+      { tenantId, conversationId }
     );
 
     // Send messages and record providerMessageId

@@ -108,6 +108,33 @@ export type WaitNode = {
   position?: NodePosition;
 };
 
+export type AIAgentNode = {
+  id: string;
+  type: "ai_agent";
+  knowledgeBaseId: string;
+  queryVariable?: string; // variable containing user query (default: last incoming reply or 'query')
+  prompt?: string; // custom system prompt override
+  saveResponseAs?: string; // variable to store AI answer (default: 'ai_response')
+  sendImmediately?: boolean; // default true (automatically emit answer as outbound message)
+  fallbackThreshold?: number; // default 0.2
+  onFallback?: string; // target node if confidence is below threshold or error occurs
+  next?: string;
+  ports?: NodePort[];
+  position?: NodePosition;
+};
+
+export type IntentRouterNode = {
+  id: string;
+  type: "intent_router";
+  inputVariable?: string; // variable containing user input (default: last incoming reply)
+  branches: { intent: string; next: string }[];
+  default?: string;
+  saveIntentAs?: string;
+  saveSentimentAs?: string;
+  ports?: NodePort[];
+  position?: NodePosition;
+};
+
 export type HandoffNode = {
   id: string;
   type: "handoff";
@@ -129,6 +156,8 @@ export type FlowNode =
   | ActionNode
   | TemplateNode
   | WaitNode
+  | AIAgentNode
+  | IntentRouterNode
   | HandoffNode
   | EndNode;
 
@@ -212,6 +241,20 @@ export function validateFlowDefinition(def: FlowDefinition): string[] {
           errors.push(`Node "${node.id}" (wait) must have a valid non-negative duration`);
         }
         checkNext(node.next);
+        break;
+      case "ai_agent":
+        if (!node.knowledgeBaseId) errors.push(`Node "${node.id}" (ai_agent) is missing knowledgeBaseId`);
+        checkNext(node.next);
+        checkNext(node.onFallback);
+        node.ports?.forEach((p) => checkNext(p.next));
+        break;
+      case "intent_router":
+        if (!node.branches?.length && !node.default) {
+          errors.push(`Node "${node.id}" (intent_router) has no branches or default`);
+        }
+        node.branches?.forEach((b) => checkNext(b.next));
+        checkNext(node.default);
+        node.ports?.forEach((p) => checkNext(p.next));
         break;
       case "handoff":
       case "end":
