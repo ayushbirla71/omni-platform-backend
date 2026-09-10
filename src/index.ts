@@ -22,6 +22,9 @@ import { templatesRouter } from "./modules/whatsapp-onboarding/templates.routes"
 import { searchRouter } from "./modules/search/search.routes";
 import { mediaRouter } from "./modules/media/media.routes";
 import { systemRouter } from "./modules/system/system.routes";
+import { productsRouter } from "./modules/commerce/products.routes";
+import { ordersRouter } from "./modules/commerce/orders.routes";
+import { paymentsRouter, paymentWebhooksRouter } from "./modules/commerce/payments.routes";
 import { ensureMediaBucketExists } from "./db/object-storage";
 import { ensureSearchIndices } from "./db/elasticsearch";
 
@@ -68,6 +71,10 @@ app.use("/api/channels", templatesRouter); // adds GET/POST /api/channels/:chann
 app.use("/api/search", searchRouter);
 app.use("/api/media", mediaRouter);
 app.use("/api/system", systemRouter);
+app.use("/api/products", productsRouter);
+app.use("/api/orders", ordersRouter);
+app.use("/api/payments", paymentsRouter);
+app.use("/webhooks/payments", paymentWebhooksRouter);
 app.use("/webhooks", webhooksRouter);
 
 // Global production-grade error handler

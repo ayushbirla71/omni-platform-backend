@@ -8,7 +8,7 @@
 export interface NormalizedMessage {
   channelExternalContactId: string; // phone number, IG user id, Telegram chat id, etc.
   contactName?: string;
-  type: "text" | "image" | "document" | "audio" | "video" | "sticker" | "button" | "unknown";
+  type: "text" | "image" | "document" | "audio" | "video" | "sticker" | "button" | "order" | "unknown";
   text?: string;
   mediaUrl?: string;
   providerMessageId?: string; // provider message identifier (e.g. WhatsApp WAMID, Telegram message_id)
@@ -18,7 +18,7 @@ export interface NormalizedMessage {
 
 export interface OutboundMessage {
   toExternalContactId: string;
-  type: "text" | "image" | "document" | "template";
+  type: "text" | "image" | "document" | "template" | "product" | "product_list";
   text?: string;
   mediaUrl?: string;
   templateName?: string;
@@ -26,6 +26,12 @@ export interface OutboundMessage {
   templateParams?: Record<string, string>;
   headerType?: "TEXT" | "IMAGE" | "DOCUMENT" | "VIDEO";
   headerValue?: string;
+  catalogId?: string;
+  productRetailerId?: string;
+  sections?: Array<{
+    title: string;
+    product_items: Array<{ product_retailer_id: string }>;
+  }>;
 }
 
 export interface MessageStatusUpdate {

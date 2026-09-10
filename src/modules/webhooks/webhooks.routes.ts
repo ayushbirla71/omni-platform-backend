@@ -5,6 +5,8 @@ import { findOrCreateContact } from "../contacts/contacts.service";
 import { findOrCreateOpenConversation } from "../conversations/conversations.service";
 import { recordInboundMessage, recordMessageStatusEvent } from "../messages/messages.service";
 import { runFlowForConversation, handleDeliveryStatusCallback } from "../flows/flow-engine-runner";
+import { createOrder } from "../commerce/orders.service";
+import { getProductBySku } from "../commerce/products.service";
 import { asyncHandler } from "../../middleware/async-handler";
 import { uploadMedia } from "../../db/object-storage";
 import { Logger } from "../../utils/logger";
@@ -238,7 +240,46 @@ async function processInboundWebhook(
       continue;
     }
 
-    if ((msg.type === "text" || msg.type === "button") && msg.text) {
+    if (msg.type === "order") {
+      try {
+        const rawOrder = (msg.raw as any)?.order;
+        const rawItems = rawOrder?.product_items || [];
+        const items = [];
+        for (const rawItem of rawItems) {
+          const sku = rawItem.product_retailer_id || "UNKNOWN";
+          const product = await getProductBySku(channel.tenant_id, sku).catch(() => null);
+          const unitPrice = rawItem.item_price ? parseFloat(rawItem.item_price) : (product?.price || 0);
+          const qty = parseInt(String(rawItem.quantity || 1), 10);
+          items.push({
+            productId: product?.id,
+            sku: sku,
+            name: product?.name || `Product (${sku})`,
+            quantity: isNaN(qty) ? 1 : qty,
+            unitPrice: isNaN(unitPrice) ? 0 : unitPrice,
+          });
+        }
+
+        if (items.length > 0) {
+          const createdOrder = await createOrder(channel.tenant_id, {
+            contactId: contact.id,
+            conversationId: conversation.id,
+            items,
+            currency: rawItems[0]?.currency || "INR",
+            paymentMethod: "whatsapp_catalog",
+            metadata: {
+              whatsappCatalogId: rawOrder?.catalog_id,
+              customerNote: rawOrder?.text,
+              providerMessageId: msg.providerMessageId || (msg.raw as any)?.id,
+            },
+          });
+          log.info(`[webhooks] Created order ${createdOrder.order_number} for contact ${contact.id}`);
+        }
+      } catch (orderErr) {
+        log.error("[webhooks] Failed to create order from WhatsApp order message:", orderErr);
+      }
+    }
+
+    if ((msg.type === "text" || msg.type === "button" || msg.type === "order") && msg.text) {
       // Run flow asynchronously so webhook returns 200 OK immediately and prevents provider retry storms
       runFlowForConversation({
         tenantId: channel.tenant_id,

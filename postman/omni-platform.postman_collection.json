@@ -1644,6 +1644,274 @@
           ]
         }
       ]
+    },
+    {
+      "name": "14. Products & Catalog",
+      "item": [
+        {
+          "name": "Create Product",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Premium Wireless Headphones\",\n  \"sku\": \"PROD-AUDIO-001\",\n  \"description\": \"Active noise cancellation, 40hr battery life\",\n  \"price\": 149.99,\n  \"currency\": \"USD\",\n  \"category\": \"Audio\",\n  \"images\": [\"https://images.unsplash.com/photo-1505740420928-5e560c06d30e\"],\n  \"inventoryQuantity\": 100,\n  \"isAvailable\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/products",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "products"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Product created', () => pm.response.code === 201);",
+                  "const body = pm.response.json();",
+                  "if (body.product && body.product.id) pm.collectionVariables.set('productId', body.product.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Products",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/products?limit=20&page=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "products"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "page", "value": "1" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Product by SKU",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/sku/PROD-AUDIO-001",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "products", "sku", "PROD-AUDIO-001"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "15. Orders & Cart",
+      "item": [
+        {
+          "name": "Create Order",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"contactId\": \"{{contactId}}\",\n  \"conversationId\": \"{{conversationId}}\",\n  \"currency\": \"USD\",\n  \"items\": [\n    {\n      \"sku\": \"PROD-AUDIO-001\",\n      \"name\": \"Premium Wireless Headphones\",\n      \"quantity\": 1,\n      \"unitPrice\": 149.99,\n      \"total\": 149.99\n    }\n  ],\n  \"shippingAddress\": {\n    \"street\": \"123 Commerce St\",\n    \"city\": \"Tech City\",\n    \"country\": \"US\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/orders",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "orders"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Order created', () => pm.response.code === 201);",
+                  "const body = pm.response.json();",
+                  "if (body.order && body.order.id) pm.collectionVariables.set('orderId', body.order.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Order Stats",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "orders", "stats"]
+            }
+          }
+        },
+        {
+          "name": "List Orders",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders?limit=20&page=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "orders"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "page", "value": "1" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Order Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"processing\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/orders/{{orderId}}/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "orders", "{{orderId}}", "status"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "16. Payments",
+      "item": [
+        {
+          "name": "Create Razorpay Payment Link",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"customer\": {\n    \"name\": \"John Doe\",\n    \"email\": \"john@example.com\",\n    \"contact\": \"+1234567890\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/payments/razorpay/link",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "payments", "razorpay", "link"]
+            }
+          }
+        },
+        {
+          "name": "Create Stripe Checkout Session",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"successUrl\": \"https://omni-platform.ad96.in/orders?success=true\",\n  \"cancelUrl\": \"https://omni-platform.ad96.in/orders?cancelled=true\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/payments/stripe/session",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "payments", "stripe", "session"]
+            }
+          }
+        },
+        {
+          "name": "Record Manual Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{orderId}}\",\n  \"amount\": 149.99,\n  \"referenceId\": \"BANK-TRF-98210\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/payments/manual",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "payments", "manual"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "17. System Diagnostics",
+      "item": [
+        {
+          "name": "Get System Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/system/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "system", "status"]
+            }
+          }
+        },
+        {
+          "name": "Get System Logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/system/logs?limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "system", "logs"],
+              "query": [{ "key": "limit", "value": "50" }]
+            }
+          }
+        },
+        {
+          "name": "Get System Error Logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/system/errors?limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "system", "errors"],
+              "query": [{ "key": "limit", "value": "50" }]
+            }
+          }
+        }
+      ]
     }
   ]
 }

@@ -70,6 +70,10 @@ export class WhatsAppAdapter implements ChannelAdapter {
             if (!text && msg.video?.caption) text = msg.video.caption;
           } else if (msg.type === "sticker") {
             mediaId = msg.sticker?.id;
+          } else if (msg.type === "order") {
+            const items = msg.order?.product_items || [];
+            const itemsDesc = items.map((i: any) => `${i.quantity || 1}x ${i.product_retailer_id || "item"}`).join(", ");
+            text = `🛒 Order received: ${itemsDesc || "Cart items"}${msg.order?.text ? ` (Note: "${msg.order.text}")` : ""}`;
           }
 
           messages.push({
@@ -247,6 +251,8 @@ function mapMessageType(waType: string): NormalizedMessage["type"] {
       return "video";
     case "sticker":
       return "sticker";
+    case "order":
+      return "order";
     case "button":
     case "interactive":
       return "button";
@@ -339,6 +345,35 @@ function buildOutboundBody(message: OutboundMessage) {
         name: message.templateName,
         language: { code: message.templateLanguage || "en" },
         components,
+      },
+    };
+  }
+  if (message.type === "product") {
+    return {
+      ...base,
+      type: "interactive",
+      interactive: {
+        type: "product",
+        body: message.text ? { text: message.text } : undefined,
+        action: {
+          catalog_id: message.catalogId,
+          product_retailer_id: message.productRetailerId,
+        },
+      },
+    };
+  }
+  if (message.type === "product_list") {
+    return {
+      ...base,
+      type: "interactive",
+      interactive: {
+        type: "product_list",
+        header: message.headerValue ? { type: "text", text: message.headerValue } : undefined,
+        body: { text: message.text || "Explore our products" },
+        action: {
+          catalog_id: message.catalogId,
+          sections: message.sections || [],
+        },
       },
     };
   }

@@ -2,7 +2,12 @@
 
 Omnichannel chatbot / CRM / business-automation backend. Node.js + TypeScript + Express, talking to Postgres directly through `pg` — no ORM. See `IMPLEMENTATION_TRACKER.md` for what's built vs planned, and `omnichannel-platform-architecture.md` (in the parent conversation) for the full system design.
 
-## Setup
+## Guides & Documentation
+
+- [Architecture Plan](../omnichannel-platform-architecture.md)
+- [Implementation Tracker](../IMPLEMENTATION_TRACKER.md)
+- [Testing & Operation Guide (Flows, Commerce, WhatsApp Catalogs & Payments)](../TESTING_AND_OPERATION_GUIDE.md)
+- [Production Deployment Guide](../PRODUCTION_DEPLOYMENT_GUIDE.md)
 
 ```bash
 cp .env.example .env
