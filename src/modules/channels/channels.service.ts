@@ -1,4 +1,5 @@
 import { query, queryOne } from "../../db/pool";
+import { encryptObject, decryptObject } from "../../utils/crypto";
 
 export interface Channel {
   id: string;
@@ -23,11 +24,16 @@ export async function createChannel(params: {
   credentials: Record<string, any>;
 }): Promise<Channel> {
   const { tenantId, type, displayName, credentials } = params;
+  const encryptedCredentials = encryptObject(credentials);
+
   const row = await queryOne<Channel>(
     `INSERT INTO channels (tenant_id, type, display_name, credentials)
      VALUES ($1, $2, $3, $4) RETURNING *`,
-    [tenantId, type, displayName, credentials]
+    [tenantId, type, displayName, encryptedCredentials]
   );
+  if (row) {
+    row.credentials = decryptObject(row.credentials);
+  }
   return row!;
 }
 
@@ -58,16 +64,24 @@ export async function getChannelWithCredentials(
   channelId: string
 ): Promise<Channel | null> {
   if (!isValidUuid(channelId) || !isValidUuid(tenantId)) return null;
-  return queryOne<Channel>(
+  const row = await queryOne<Channel>(
     "SELECT * FROM channels WHERE tenant_id = $1 AND id = $2",
     [tenantId, channelId]
   );
+  if (row) {
+    row.credentials = decryptObject(row.credentials);
+  }
+  return row;
 }
 
 /** Same tenant-agnostic-caller exception as getCampaignByIdUnscoped — see that function's comment. */
 export async function getChannelByIdUnscoped(channelId: string): Promise<Channel | null> {
   if (!isValidUuid(channelId)) return null;
-  return queryOne<Channel>("SELECT * FROM channels WHERE id = $1", [channelId]);
+  const row = await queryOne<Channel>("SELECT * FROM channels WHERE id = $1", [channelId]);
+  if (row) {
+    row.credentials = decryptObject(row.credentials);
+  }
+  return row;
 }
 
 export async function updateChannel(
@@ -76,16 +90,19 @@ export async function updateChannel(
   updates: { displayName?: string; credentials?: Record<string, any>; status?: string }
 ): Promise<Channel | null> {
   if (!isValidUuid(channelId) || !isValidUuid(tenantId)) return null;
-  // Credentials are replaced wholesale rather than merged: a partial update
-  // (e.g. rotating just accessToken) should still send the full object the
-  // caller wants stored, so a stale key from before can't linger silently.
-  return queryOne<Channel>(
+  const encryptedCredentials = updates.credentials ? encryptObject(updates.credentials) : null;
+
+  const row = await queryOne<Channel>(
     `UPDATE channels SET
        display_name = COALESCE($1, display_name),
        credentials  = COALESCE($2, credentials),
        status       = COALESCE($3, status)
      WHERE id = $4 AND tenant_id = $5
      RETURNING *`,
-    [updates.displayName ?? null, updates.credentials ?? null, updates.status ?? null, channelId, tenantId]
+    [updates.displayName ?? null, encryptedCredentials ?? null, updates.status ?? null, channelId, tenantId]
   );
+  if (row) {
+    row.credentials = decryptObject(row.credentials);
+  }
+  return row;
 }

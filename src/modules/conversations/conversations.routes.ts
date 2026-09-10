@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { AuthedRequest, requireAuth } from "../../middleware/auth";
 import { asyncHandler } from "../../middleware/async-handler";
-import { listConversations, assignAgent } from "./conversations.service";
+import { listConversations, assignAgent, updateConversationStatus } from "./conversations.service";
 import { listMessages, sendOutboundMessage } from "../messages/messages.service";
 
 export const conversationsRouter = Router();
@@ -57,6 +57,18 @@ conversationsRouter.post(
     // agentUserId is a foreign key to users(id) — an unknown id now falls
     // through to the global handler's 23503 mapping instead of hanging.
     await assignAgent(req.auth!.tenantId, req.params.id, agentUserId);
+    res.status(204).send();
+  })
+);
+
+conversationsRouter.patch(
+  "/:id/status",
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const { status } = req.body || {};
+    if (!status || !["open", "pending", "closed"].includes(status)) {
+      return res.status(400).json({ error: "Valid status ('open', 'pending', 'closed') is required" });
+    }
+    await updateConversationStatus(req.auth!.tenantId, req.params.id, status);
     res.status(204).send();
   })
 );

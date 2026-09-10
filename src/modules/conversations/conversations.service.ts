@@ -1,4 +1,5 @@
 import { query, queryOne } from "../../db/pool";
+import { emitRealtimeEvent } from "../realtime/websocket.service";
 
 export interface Conversation {
   id: string;
@@ -147,4 +148,39 @@ export async function assignAgent(
     "UPDATE conversations SET assigned_agent_id = $1 WHERE id = $2 AND tenant_id = $3",
     [agentUserId, conversationId, tenantId]
   );
+  emitRealtimeEvent(
+    tenantId,
+    "conversation:assigned",
+    { conversationId, assignedAgentUserId: agentUserId },
+    { conversationId }
+  ).catch(() => {});
+}
+
+export async function updateConversationStatus(
+  tenantId: string,
+  conversationId: string,
+  status: "open" | "pending" | "closed"
+): Promise<void> {
+  if (status === "closed") {
+    await query(
+      `UPDATE conversations
+       SET status = $1,
+           resolved_at = now(),
+           resolution_duration_seconds = EXTRACT(EPOCH FROM (now() - created_at))::INTEGER
+       WHERE id = $2 AND tenant_id = $3`,
+      [status, conversationId, tenantId]
+    );
+  } else {
+    await query(
+      "UPDATE conversations SET status = $1 WHERE id = $2 AND tenant_id = $3",
+      [status, conversationId, tenantId]
+    );
+  }
+
+  emitRealtimeEvent(
+    tenantId,
+    "conversation:status",
+    { conversationId, status },
+    { conversationId }
+  ).catch(() => {});
 }

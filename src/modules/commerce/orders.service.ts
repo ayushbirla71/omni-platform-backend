@@ -335,6 +335,10 @@ export async function getOrderStats(tenantId: string): Promise<{
   pendingCount: number;
   paidCount: number;
   completedCount: number;
+  pendingOrders?: number;
+  paidOrders?: number;
+  completedOrders?: number;
+  cancelledOrders?: number;
 }> {
   const row = await queryOne<{
     total_orders: string;
@@ -354,11 +358,19 @@ export async function getOrderStats(tenantId: string): Promise<{
     [tenantId]
   );
 
+  const pending = parseInt(row?.pending_count || "0", 10);
+  const paid = parseInt(row?.paid_count || "0", 10);
+  const completed = parseInt(row?.completed_count || "0", 10);
+
   return {
     totalOrders: parseInt(row?.total_orders || "0", 10),
     totalRevenue: parseFloat(row?.total_revenue || "0"),
-    pendingCount: parseInt(row?.pending_count || "0", 10),
-    paidCount: parseInt(row?.paid_count || "0", 10),
-    completedCount: parseInt(row?.completed_count || "0", 10),
+    pendingCount: pending,
+    paidCount: paid,
+    completedCount: completed,
+    pendingOrders: pending,
+    paidOrders: paid,
+    completedOrders: completed,
+    cancelledOrders: 0,
   };
 }

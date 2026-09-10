@@ -1,3 +1,4 @@
+import http from "http";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -12,6 +13,7 @@ import { channelsRouter } from "./modules/channels/channels.routes";
 import { contactsRouter } from "./modules/contacts/contacts.routes";
 import { conversationsRouter } from "./modules/conversations/conversations.routes";
 import { webhooksRouter } from "./modules/webhooks/webhooks.routes";
+import { outgoingWebhooksRouter } from "./modules/webhooks/outgoing-webhooks.routes";
 import { flowsRouter } from "./modules/flows/flows.routes";
 import { dealsRouter } from "./modules/deals/deals.routes";
 import { campaignsRouter } from "./modules/campaigns/campaigns.routes";
@@ -27,8 +29,15 @@ import { ordersRouter } from "./modules/commerce/orders.routes";
 import { paymentsRouter, paymentWebhooksRouter } from "./modules/commerce/payments.routes";
 import { knowledgeBaseRouter } from "./modules/ai/knowledge-base.routes";
 import { aiRouter } from "./modules/ai/ai.routes";
+import { auditRouter } from "./modules/audit/audit.routes";
+import { apiKeysRouter } from "./modules/api-keys/api-keys.routes";
+import { teamRouter } from "./modules/team/team.routes";
+import { billingRouter } from "./modules/billing/billing.routes";
+import { complianceRouter } from "./modules/compliance/compliance.routes";
+import { analyticsRouter } from "./modules/analytics/analytics.routes";
 import { ensureMediaBucketExists } from "./db/object-storage";
 import { ensureSearchIndices } from "./db/elasticsearch";
+import { realtimeGateway } from "./modules/realtime/websocket.service";
 
 import { runFlowForConversation } from "./modules/flows/flow-engine-runner";
 import { initFlowDelayWorker } from "./modules/jobs/queue.service";
@@ -78,6 +87,13 @@ app.use("/api/orders", ordersRouter);
 app.use("/api/payments", paymentsRouter);
 app.use("/api/knowledge-bases", knowledgeBaseRouter);
 app.use("/api/ai", aiRouter);
+app.use("/api/audit-logs", auditRouter);
+app.use("/api/api-keys", apiKeysRouter);
+app.use("/api/team", teamRouter);
+app.use("/api/billing", billingRouter);
+app.use("/api/compliance", complianceRouter);
+app.use("/api/analytics", analyticsRouter);
+app.use("/api/webhooks/subscriptions", outgoingWebhooksRouter);
 app.use("/webhooks/payments", paymentWebhooksRouter);
 app.use("/webhooks", webhooksRouter);
 
@@ -95,8 +111,15 @@ process.on("uncaughtException", (err: Error) => {
   logger.fatal("Uncaught Exception thrown in Node process:", err);
 });
 
+const server = http.createServer(app);
+
+// Initialize Realtime WebSocket Gateway & Redis Pub/Sub
+realtimeGateway.init(server).catch((err) => {
+  logger.error("Failed to initialize realtime WebSocket gateway:", err);
+});
+
 const port = Number(process.env.PORT) || 4000;
-app.listen(port, () => {
+server.listen(port, () => {
   logger.info(`omni-platform backend listening on :${port}`);
 });
 

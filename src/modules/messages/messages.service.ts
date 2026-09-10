@@ -5,6 +5,8 @@ import { touchLastMessageAt } from "../conversations/conversations.service";
 import { getChannelWithCredentials } from "../channels/channels.service";
 import { getAdapter } from "../channels/channel-registry";
 import { indexMessage } from "../search/search.service";
+import { emitRealtimeEvent } from "../realtime/websocket.service";
+import { dispatchWebhookEvent } from "../webhooks/outgoing-webhooks.service";
 
 /**
  * Messages live in MongoDB, not Postgres — per architecture doc §3, chat
@@ -159,6 +161,12 @@ export async function recordInboundMessage(params: {
   await collection.insertOne(doc);
   await touchLastMessageAt(conversationId);
   const message = toMessage(doc);
+  emitRealtimeEvent(tenantId, "message:new", message, { conversationId }).catch((err) => {
+    console.error("[messages] Realtime event emit failed (non-fatal):", err);
+  });
+  dispatchWebhookEvent(tenantId, "message.received", message).catch((err) => {
+    console.error("[messages] Webhook dispatch failed (non-fatal):", err);
+  });
   indexMessage(message).catch((err) => {
     // Search indexing is best-effort — a search-index outage should never
     // block message delivery. See src/modules/search/search.service.ts.
@@ -257,7 +265,26 @@ export async function sendOutboundMessage(params: {
     } catch {}
   }
 
+  // Update SLA metrics: record first response time if this is the initial outbound message
+  try {
+    await query(
+      `UPDATE conversations
+       SET first_response_at = COALESCE(first_response_at, now()),
+           first_response_duration_seconds = COALESCE(first_response_duration_seconds, EXTRACT(EPOCH FROM (now() - created_at))::INTEGER)
+       WHERE id = $1 AND tenant_id = $2 AND first_response_at IS NULL`,
+      [conversationId, tenantId]
+    );
+  } catch (err: any) {
+    console.error("[messages] Failed to update conversation SLA first response metrics (non-fatal):", err?.message);
+  }
+
   const message = toMessage(doc);
+  emitRealtimeEvent(tenantId, "message:new", message, { conversationId }).catch((err) => {
+    console.error("[messages] Realtime event emit failed (non-fatal):", err);
+  });
+  dispatchWebhookEvent(tenantId, "message.sent", message).catch((err) => {
+    console.error("[messages] Webhook dispatch failed (non-fatal):", err);
+  });
   indexMessage(message).catch((err) => {
     console.error("[messages] Elasticsearch indexing failed (non-fatal):", err);
   });
@@ -318,6 +345,14 @@ export async function recordMessageStatusEvent(params: {
       { id: messageDoc.id },
       { $set: { latestStatus: status, latestStatusAt: timestamp } }
     );
+    emitRealtimeEvent(tenantId, "message:status", {
+      messageId: messageDoc.id,
+      providerMessageId,
+      status,
+      errorCode,
+      errorMessage,
+      timestamp: timestamp.toISOString(),
+    }, { conversationId: messageDoc.conversationId }).catch(() => {});
     return { conversationId: messageDoc.conversationId };
   }
 
