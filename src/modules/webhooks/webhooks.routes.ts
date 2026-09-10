@@ -19,6 +19,52 @@ function isValidUuid(id: unknown): id is string {
   return typeof id === "string" && UUID_REGEX.test(id);
 }
 
+function getExtensionFromMimeType(mimeType: string, defaultExt: string = "bin"): string {
+  if (!mimeType) return defaultExt;
+  // Strip parameters like codecs, e.g. "audio/ogg; codecs=opus" -> "audio/ogg"
+  const cleanMime = mimeType.split(";")[0].trim().toLowerCase();
+  switch (cleanMime) {
+    case "image/jpeg":
+    case "image/jpg":
+      return "jpg";
+    case "image/png":
+      return "png";
+    case "image/webp":
+      return "webp";
+    case "image/gif":
+      return "gif";
+    case "application/pdf":
+      return "pdf";
+    case "audio/ogg":
+    case "audio/opus":
+      return "ogg";
+    case "audio/mpeg":
+    case "audio/mp3":
+      return "mp3";
+    case "audio/aac":
+      return "aac";
+    case "audio/wav":
+    case "audio/x-wav":
+      return "wav";
+    case "video/mp4":
+      return "mp4";
+    case "video/3gpp":
+      return "3gp";
+    case "application/msword":
+      return "doc";
+    case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+      return "docx";
+    case "application/vnd.ms-excel":
+      return "xls";
+    case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+      return "xlsx";
+    default: {
+      const sub = cleanMime.split("/")[1];
+      return sub ? sub.replace(/[^a-z0-9]/gi, "") : defaultExt;
+    }
+  }
+}
+
 interface ChannelRow {
   id: string;
   tenant_id: string;
@@ -151,13 +197,23 @@ async function processInboundWebhook(
     });
 
     let storedMediaKey: string | undefined;
-    if (msg.mediaUrl && (msg.type === "image" || msg.type === "document" || msg.type === "audio")) {
+    if (
+      msg.mediaUrl &&
+      (msg.type === "image" ||
+        msg.type === "document" ||
+        msg.type === "audio" ||
+        msg.type === "video" ||
+        msg.type === "sticker")
+    ) {
       try {
         const { buffer, contentType } = await adapter.downloadMedia(msg.mediaUrl, channel.credentials);
-        const extension = contentType.split("/")[1] || "bin";
+        const extension = getExtensionFromMimeType(contentType, msg.type === "image" ? "jpg" : "bin");
         const key = `${channel.tenant_id}/${conversation.id}/${Date.now()}.${extension}`;
         await uploadMedia({ key, body: buffer, contentType });
         storedMediaKey = key;
+        log.info(
+          `Inbound media saved to storage: key=${key}, contentType=${contentType}, size=${buffer.length} bytes, type=${msg.type}`
+        );
       } catch (err) {
         log.error(`media download/upload failed for channel ${channel.id} (non-fatal):`, err);
       }

@@ -25,6 +25,8 @@ export interface Message {
   direction: "inbound" | "outbound";
   type: string;
   text?: string;
+  mediaUrl?: string;
+  mediaStorageKey?: string;
   content: Record<string, any>;
   sender_user_id: string | null;
   senderUserId?: string | null;
@@ -64,16 +66,20 @@ interface MessageStatusEventDoc {
 }
 
 function toMessage(doc: MessageDoc): Message {
+  const rawText = doc.content?.text || (typeof doc.content === "string" ? doc.content : "");
   const text =
-    doc.content?.text ||
-    (typeof doc.content === "string" ? doc.content : "") ||
+    rawText ||
     (doc.type === "template" ? `[Template: ${doc.content?.templateName || ""}]` : "") ||
     (doc.type === "image" ? "[Image]" : "") ||
-    (doc.type === "document" ? "[Document]" : "") ||
+    (doc.type === "document" ? (doc.content?.filename ? `[Document: ${doc.content.filename}]` : "[Document]") : "") ||
     (doc.type === "audio" ? "[Audio]" : "") ||
+    (doc.type === "video" ? "[Video]" : "") ||
+    (doc.type === "sticker" ? "[Sticker]" : "") ||
     "";
 
   const isoDate = doc.sentAt ? new Date(doc.sentAt).toISOString() : new Date().toISOString();
+  const mediaStorageKey = doc.content?.mediaStorageKey;
+  const mediaUrl = doc.content?.mediaUrl || doc.content?.mediaProviderId;
 
   return {
     _id: doc.id,
@@ -85,6 +91,8 @@ function toMessage(doc: MessageDoc): Message {
     direction: doc.direction,
     type: doc.type,
     text,
+    mediaUrl,
+    mediaStorageKey,
     content: doc.content,
     sender_user_id: doc.senderUserId,
     senderUserId: doc.senderUserId,

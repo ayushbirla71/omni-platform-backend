@@ -8,7 +8,7 @@
 export interface NormalizedMessage {
   channelExternalContactId: string; // phone number, IG user id, Telegram chat id, etc.
   contactName?: string;
-  type: "text" | "image" | "document" | "audio" | "button" | "unknown";
+  type: "text" | "image" | "document" | "audio" | "video" | "sticker" | "button" | "unknown";
   text?: string;
   mediaUrl?: string;
   providerMessageId?: string; // provider message identifier (e.g. WhatsApp WAMID, Telegram message_id)

@@ -69,3 +69,14 @@ export async function getMediaDownloadUrl(key: string, expiresInSeconds = 3600):
     expiresIn: expiresInSeconds,
   });
 }
+
+/** Fetch media object body and headers directly for streaming through API */
+export async function getMediaObject(key: string): Promise<{ body: any; contentType: string; contentLength?: number }> {
+  const s3 = getS3Client();
+  const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+  return {
+    body: res.Body,
+    contentType: res.ContentType || "application/octet-stream",
+    contentLength: res.ContentLength,
+  };
+}

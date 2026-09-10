@@ -54,12 +54,30 @@ export class WhatsAppAdapter implements ChannelAdapter {
         const contactName = contacts[0]?.profile?.name;
 
         for (const msg of value?.messages ?? []) {
+          let mediaId: string | undefined;
+          let text = msg.text?.body ?? extractInteractiveReplyText(msg);
+
+          if (msg.type === "image") {
+            mediaId = msg.image?.id;
+            if (!text && msg.image?.caption) text = msg.image.caption;
+          } else if (msg.type === "document") {
+            mediaId = msg.document?.id;
+            if (!text) text = msg.document?.caption || msg.document?.filename;
+          } else if (msg.type === "audio" || msg.type === "voice") {
+            mediaId = msg.audio?.id || msg.voice?.id;
+          } else if (msg.type === "video") {
+            mediaId = msg.video?.id;
+            if (!text && msg.video?.caption) text = msg.video.caption;
+          } else if (msg.type === "sticker") {
+            mediaId = msg.sticker?.id;
+          }
+
           messages.push({
             channelExternalContactId: msg.from,
             contactName,
             type: mapMessageType(msg.type),
-            text: msg.text?.body ?? extractInteractiveReplyText(msg),
-            mediaUrl: msg.image?.id || msg.document?.id || undefined, // media needs a follow-up media-download call
+            text,
+            mediaUrl: mediaId, // media needs a follow-up media-download call
             providerMessageId: msg.id,
             raw: msg,
             receivedAt: new Date(Number(msg.timestamp) * 1000),
@@ -223,7 +241,12 @@ function mapMessageType(waType: string): NormalizedMessage["type"] {
     case "document":
       return "document";
     case "audio":
+    case "voice":
       return "audio";
+    case "video":
+      return "video";
+    case "sticker":
+      return "sticker";
     case "button":
     case "interactive":
       return "button";
