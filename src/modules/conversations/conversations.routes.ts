@@ -28,21 +28,20 @@ conversationsRouter.post(
   "/:id/messages",
   asyncHandler(async (req: AuthedRequest, res) => {
     const { text } = req.body || {};
-    if (!text) return res.status(400).json({ error: "text is required" });
-    // Kept as its own try/catch (rather than relying only on the global
-    // handler) because "failed to send" deserves a specific message, not
-    // the generic constraint-violation mapping.
+    if (!text || !text.trim()) return res.status(400).json({ error: "text is required" });
     try {
       const message = await sendOutboundMessage({
         tenantId: req.auth!.tenantId,
         conversationId: req.params.id,
         senderUserId: req.auth!.userId,
-        text,
+        text: text.trim(),
       });
       res.status(201).json(message);
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: "Failed to send message" });
+    } catch (err: any) {
+      console.error("[conversations] Outbound send error:", err);
+      res.status(err?.status || 500).json({
+        error: err?.message || "Failed to send message",
+      });
     }
   })
 );

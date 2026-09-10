@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { getMongoDb } from "../../db/mongo";
-import { queryOne } from "../../db/pool";
+import { query, queryOne } from "../../db/pool";
 import { touchLastMessageAt } from "../conversations/conversations.service";
 import { getChannelWithCredentials } from "../channels/channels.service";
 import { getAdapter } from "../channels/channel-registry";
@@ -226,6 +226,18 @@ export async function sendOutboundMessage(params: {
   const collection = await getMessagesCollection();
   await collection.insertOne(doc);
   await touchLastMessageAt(conversationId);
+
+  if (senderUserId) {
+    // When a human agent sends a message from the inbox, pause/hand off any active flow run
+    // so automated bot flows don't collide with the human agent.
+    try {
+      await query(
+        "UPDATE flow_runs SET status = 'handed_off', updated_at = now() WHERE conversation_id = $1 AND status = 'running'",
+        [conversationId]
+      );
+    } catch {}
+  }
+
   const message = toMessage(doc);
   await indexMessage(message).catch((err) => {
     console.error("[messages] Elasticsearch indexing failed (non-fatal):", err);

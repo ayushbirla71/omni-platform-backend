@@ -117,7 +117,22 @@ export class WhatsAppAdapter implements ChannelAdapter {
 
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`WhatsApp send failed (${response.status}): ${errText}`);
+      let errorMsg = `WhatsApp send failed (${response.status}): ${errText}`;
+      try {
+        const parsed = JSON.parse(errText);
+        const metaErr = parsed?.error;
+        if (metaErr) {
+          if (metaErr.code === 131047) {
+            errorMsg = "WhatsApp 24-hour customer window expired. You must use an approved template to re-engage with this customer.";
+          } else if (metaErr.message) {
+            errorMsg = `WhatsApp API error (${metaErr.code || response.status}): ${metaErr.message}`;
+            if (metaErr.error_data?.details) {
+              errorMsg += ` - ${metaErr.error_data.details}`;
+            }
+          }
+        }
+      } catch {}
+      throw new Error(errorMsg);
     }
 
     const data = (await response.json()) as { messages?: { id: string }[] };
