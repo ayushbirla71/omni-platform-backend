@@ -163,7 +163,7 @@ async function processInboundWebhook(
       }
     }
 
-    await recordInboundMessage({
+    const { isDuplicate } = await recordInboundMessage({
       tenantId: channel.tenant_id,
       conversationId: conversation.id,
       type: msg.type,
@@ -174,14 +174,23 @@ async function processInboundWebhook(
         raw: msg.raw,
       },
       sentAt: msg.receivedAt,
+      providerMessageId: msg.providerMessageId || (msg.raw as any)?.id,
     });
 
+    if (isDuplicate) {
+      log.info(`[webhooks] Deduplicated incoming message (${msg.providerMessageId || (msg.raw as any)?.id}) — skipping flow trigger`);
+      continue;
+    }
+
     if ((msg.type === "text" || msg.type === "button") && msg.text) {
-      await runFlowForConversation({
+      // Run flow asynchronously so webhook returns 200 OK immediately and prevents provider retry storms
+      runFlowForConversation({
         tenantId: channel.tenant_id,
         conversationId: conversation.id,
         defaultFlowId: channel.default_flow_id,
         incomingText: msg.text,
+      }).catch((err) => {
+        log.error(`[webhooks] Flow execution failed for conversation ${conversation.id}:`, err);
       });
     }
   }

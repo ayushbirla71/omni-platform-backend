@@ -60,6 +60,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
             type: mapMessageType(msg.type),
             text: msg.text?.body ?? extractInteractiveReplyText(msg),
             mediaUrl: msg.image?.id || msg.document?.id || undefined, // media needs a follow-up media-download call
+            providerMessageId: msg.id,
             raw: msg,
             receivedAt: new Date(Number(msg.timestamp) * 1000),
           });
@@ -101,19 +102,40 @@ export class WhatsAppAdapter implements ChannelAdapter {
     message: OutboundMessage,
     credentials: { phoneNumberId: string; accessToken: string; apiBaseUrl?: string }
   ): Promise<{ providerMessageId: string }> {
+    if (!credentials?.phoneNumberId) {
+      throw new Error("Channel is missing phoneNumberId in credentials. Please reconnect the WhatsApp channel.");
+    }
+    if (!credentials?.accessToken) {
+      throw new Error("Channel is missing accessToken in credentials. Please reconnect the WhatsApp channel.");
+    }
+
     const baseUrl = credentials.apiBaseUrl || "https://graph.facebook.com/v20.0";
     const url = `${baseUrl}/${credentials.phoneNumberId}/messages`;
 
     const body = buildOutboundBody(message);
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${credentials.accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout to avoid reverse-proxy 502 Bad Gateway
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${credentials.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (networkErr: any) {
+      if (networkErr?.name === "AbortError") {
+        throw new Error("WhatsApp API request timed out after 15 seconds. Please check Meta network connectivity.");
+      }
+      throw new Error(`WhatsApp API network connection error: ${networkErr?.message || networkErr}`);
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       const errText = await response.text();
@@ -152,18 +174,38 @@ export class WhatsAppAdapter implements ChannelAdapter {
   ): Promise<{ buffer: Buffer; contentType: string }> {
     const baseUrl = credentials.apiBaseUrl || "https://graph.facebook.com/v20.0";
 
-    const lookupResponse = await fetch(`${baseUrl}/${mediaId}`, {
-      headers: { Authorization: `Bearer ${credentials.accessToken}` },
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+    let lookupResponse: Response;
+    try {
+      lookupResponse = await fetch(`${baseUrl}/${mediaId}`, {
+        headers: { Authorization: `Bearer ${credentials.accessToken}` },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
     if (!lookupResponse.ok) {
       throw new Error(`WhatsApp media lookup failed (${lookupResponse.status}): ${await lookupResponse.text()}`);
     }
     const lookup = (await lookupResponse.json()) as { url?: string; mime_type?: string };
     if (!lookup.url) throw new Error("WhatsApp media lookup response missing url");
 
-    const fileResponse = await fetch(lookup.url, {
-      headers: { Authorization: `Bearer ${credentials.accessToken}` },
-    });
+    const dlController = new AbortController();
+    const dlTimeoutId = setTimeout(() => dlController.abort(), 15000);
+
+    let fileResponse: Response;
+    try {
+      fileResponse = await fetch(lookup.url, {
+        headers: { Authorization: `Bearer ${credentials.accessToken}` },
+        signal: dlController.signal,
+      });
+    } finally {
+      clearTimeout(dlTimeoutId);
+    }
+
     if (!fileResponse.ok) {
       throw new Error(`WhatsApp media download failed (${fileResponse.status})`);
     }

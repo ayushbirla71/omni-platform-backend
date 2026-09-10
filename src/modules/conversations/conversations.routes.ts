@@ -39,7 +39,10 @@ conversationsRouter.post(
       res.status(201).json(message);
     } catch (err: any) {
       console.error("[conversations] Outbound send error:", err);
-      res.status(err?.status || 500).json({
+      const statusCode = typeof err?.status === "number" && err.status >= 400 && err.status < 600
+        ? err.status
+        : 400;
+      res.status(statusCode).json({
         error: err?.message || "Failed to send message",
       });
     }

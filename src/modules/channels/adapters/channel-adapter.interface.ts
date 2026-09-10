@@ -11,6 +11,7 @@ export interface NormalizedMessage {
   type: "text" | "image" | "document" | "audio" | "button" | "unknown";
   text?: string;
   mediaUrl?: string;
+  providerMessageId?: string; // provider message identifier (e.g. WhatsApp WAMID, Telegram message_id)
   raw: unknown; // original payload, kept for debugging/audit
   receivedAt: Date;
 }

@@ -37,6 +37,7 @@ export class TelegramAdapter implements ChannelAdapter {
         type: text ? "text" : hasPhoto ? "image" : msg.document ? "document" : "unknown",
         text,
         mediaUrl: hasPhoto ? msg.photo[msg.photo.length - 1].file_id : msg.document?.file_id,
+        providerMessageId: String(msg.message_id),
         raw: msg,
         receivedAt: new Date(msg.date * 1000), // Telegram sends Unix seconds, same as WhatsApp
       },
@@ -47,6 +48,10 @@ export class TelegramAdapter implements ChannelAdapter {
     message: OutboundMessage,
     credentials: { botToken: string; apiBaseUrl?: string }
   ): Promise<{ providerMessageId: string }> {
+    if (!credentials?.botToken) {
+      throw new Error("Channel is missing botToken in credentials. Please reconnect the Telegram channel.");
+    }
+
     const baseUrl = credentials.apiBaseUrl || "https://api.telegram.org";
 
     if (message.type === "template") {
@@ -63,11 +68,25 @@ export class TelegramAdapter implements ChannelAdapter {
     if (message.type === "image") body.photo = message.mediaUrl;
     if (message.type === "document") body.document = message.mediaUrl;
 
-    const response = await fetch(`${baseUrl}/bot${credentials.botToken}/${endpoint}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/bot${credentials.botToken}/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (networkErr: any) {
+      if (networkErr?.name === "AbortError") {
+        throw new Error("Telegram API request timed out after 15 seconds.");
+      }
+      throw new Error(`Telegram network connection error: ${networkErr?.message || networkErr}`);
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!response.ok) {
       const errText = await response.text();

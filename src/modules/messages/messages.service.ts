@@ -124,8 +124,19 @@ export async function recordInboundMessage(params: {
   type: string;
   content: Record<string, any>;
   sentAt: Date;
-}): Promise<Message> {
-  const { tenantId, conversationId, type, content, sentAt } = params;
+  providerMessageId?: string;
+}): Promise<{ message: Message; isDuplicate: boolean }> {
+  const { tenantId, conversationId, type, content, sentAt, providerMessageId } = params;
+  const collection = await getMessagesCollection();
+
+  // Deduplication check: if this provider message was already stored, return the existing message
+  if (providerMessageId) {
+    const existing = await collection.findOne({ providerMessageId });
+    if (existing) {
+      return { message: toMessage(existing), isDuplicate: true };
+    }
+  }
+
   const doc: MessageDoc = {
     id: uuidv4(),
     tenantId,
@@ -135,17 +146,17 @@ export async function recordInboundMessage(params: {
     content,
     senderUserId: null,
     sentAt,
+    providerMessageId,
   };
-  const collection = await getMessagesCollection();
   await collection.insertOne(doc);
   await touchLastMessageAt(conversationId);
   const message = toMessage(doc);
-  await indexMessage(message).catch((err) => {
+  indexMessage(message).catch((err) => {
     // Search indexing is best-effort — a search-index outage should never
     // block message delivery. See src/modules/search/search.service.ts.
     console.error("[messages] Elasticsearch indexing failed (non-fatal):", err);
   });
-  return message;
+  return { message, isDuplicate: false };
 }
 
 /**
