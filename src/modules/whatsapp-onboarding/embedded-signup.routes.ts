@@ -39,10 +39,10 @@ whatsappOnboardingRouter.post(
   requireRole("owner", "admin"),
   asyncHandler(async (req: AuthedRequest, res) => {
     const { code, wabaId, phoneNumberId, displayName } = req.body || {};
-    if (!code || !wabaId || !phoneNumberId || !displayName) {
+    if (!code) {
       return res
         .status(400)
-        .json({ error: "code, wabaId, phoneNumberId, and displayName are required" });
+        .json({ error: "Meta authorization code is required" });
     }
 
     const capacity = await getOnboardingCapacity();
