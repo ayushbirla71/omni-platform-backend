@@ -24,7 +24,7 @@ export async function exchangeCodeForToken(code: string): Promise<string> {
   const appId = process.env.META_APP_ID;
   const appSecret = process.env.META_APP_SECRET;
   if (!appId || !appSecret) {
-    throw new EmbeddedSignupError("META_APP_ID / META_APP_SECRET are not configured");
+    throw new EmbeddedSignupError("META_APP_ID / META_APP_SECRET are not configured in backend/.env");
   }
 
   const url = new URL(`${GRAPH_API_BASE_URL}/oauth/access_token`);
@@ -32,13 +32,16 @@ export async function exchangeCodeForToken(code: string): Promise<string> {
   url.searchParams.set("client_secret", appSecret);
   url.searchParams.set("code", code);
 
+  console.log(`[Meta Onboarding] Exchanging OAuth code for permanent access token...`);
   const response = await fetch(url.toString());
   if (!response.ok) {
     const errText = await response.text();
+    console.error(`[Meta Onboarding] Token exchange failed (${response.status}):`, errText);
     throw new EmbeddedSignupError(`Token exchange failed (${response.status}): ${errText}`);
   }
   const data = (await response.json()) as { access_token?: string };
   if (!data.access_token) throw new EmbeddedSignupError("Token exchange response missing access_token");
+  console.log(`[Meta Onboarding] Token exchange successful!`);
   return data.access_token;
 }
 
@@ -46,17 +49,43 @@ export async function exchangeCodeForToken(code: string): Promise<string> {
  * Registers the tenant's phone number for Cloud API use. Required once per
  * number before it can send/receive via the API — Embedded Signup gets the
  * number onto your app's WABA, but registration is a separate explicit step.
+ * Meta Cloud API requires a 6-digit pin for two-step verification registration.
  */
-export async function registerPhoneNumber(phoneNumberId: string, accessToken: string): Promise<void> {
+export async function registerPhoneNumber(
+  phoneNumberId: string,
+  accessToken: string,
+  pin: string = "123456"
+): Promise<void> {
+  console.log(`[Meta Onboarding] Registering phone number ${phoneNumberId} with Cloud API...`);
   const response = await fetch(`${GRAPH_API_BASE_URL}/${phoneNumberId}/register`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ messaging_product: "whatsapp" }),
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      pin: pin,
+    }),
   });
   if (!response.ok) {
     const errText = await response.text();
+    try {
+      const errJson = JSON.parse(errText);
+      const msg = errJson?.error?.message || "";
+      // If phone number is already registered or verified during the popup flow, continue gracefully
+      if (
+        msg.includes("already registered") ||
+        msg.includes("already verified") ||
+        errJson?.error?.error_subcode === 133010
+      ) {
+        console.warn(`[Meta Onboarding] Phone number ${phoneNumberId} is already registered:`, msg);
+        return;
+      }
+    } catch {
+      // Not JSON
+    }
+    console.error(`[Meta Onboarding] Phone number registration failed (${response.status}):`, errText);
     throw new EmbeddedSignupError(`Phone number registration failed (${response.status}): ${errText}`);
   }
+  console.log(`[Meta Onboarding] Phone number ${phoneNumberId} registered successfully!`);
 }
 
 /**
@@ -65,14 +94,27 @@ export async function registerPhoneNumber(phoneNumberId: string, accessToken: st
  * never receive their inbound messages.
  */
 export async function subscribeAppToWaba(wabaId: string, accessToken: string): Promise<void> {
+  console.log(`[Meta Onboarding] Subscribing app to WABA ${wabaId} webhook events...`);
   const response = await fetch(`${GRAPH_API_BASE_URL}/${wabaId}/subscribed_apps`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!response.ok) {
     const errText = await response.text();
+    try {
+      const errJson = JSON.parse(errText);
+      const msg = errJson?.error?.message || "";
+      if (msg.includes("already subscribed") || errJson?.error?.code === 100) {
+        console.warn(`[Meta Onboarding] WABA ${wabaId} is already subscribed or received notice:`, msg);
+        return;
+      }
+    } catch {
+      // Not JSON
+    }
+    console.error(`[Meta Onboarding] Webhook subscription failed (${response.status}):`, errText);
     throw new EmbeddedSignupError(`Webhook subscription failed (${response.status}): ${errText}`);
   }
+  console.log(`[Meta Onboarding] WABA ${wabaId} webhook subscription completed!`);
 }
 
 /**
