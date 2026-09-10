@@ -10,6 +10,12 @@ export interface Channel {
   created_at: string;
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isValidUuid(id: unknown): id is string {
+  return typeof id === "string" && UUID_REGEX.test(id);
+}
+
 export async function createChannel(params: {
   tenantId: string;
   type: string;
@@ -39,6 +45,7 @@ export async function setDefaultFlow(
   channelId: string,
   flowId: string | null
 ): Promise<void> {
+  if (!isValidUuid(channelId) || !isValidUuid(tenantId)) return;
   await query("UPDATE channels SET default_flow_id = $1 WHERE id = $2 AND tenant_id = $3", [
     flowId,
     channelId,
@@ -50,6 +57,7 @@ export async function getChannelWithCredentials(
   tenantId: string,
   channelId: string
 ): Promise<Channel | null> {
+  if (!isValidUuid(channelId) || !isValidUuid(tenantId)) return null;
   return queryOne<Channel>(
     "SELECT * FROM channels WHERE tenant_id = $1 AND id = $2",
     [tenantId, channelId]
@@ -58,6 +66,7 @@ export async function getChannelWithCredentials(
 
 /** Same tenant-agnostic-caller exception as getCampaignByIdUnscoped — see that function's comment. */
 export async function getChannelByIdUnscoped(channelId: string): Promise<Channel | null> {
+  if (!isValidUuid(channelId)) return null;
   return queryOne<Channel>("SELECT * FROM channels WHERE id = $1", [channelId]);
 }
 
@@ -66,6 +75,7 @@ export async function updateChannel(
   channelId: string,
   updates: { displayName?: string; credentials?: Record<string, any>; status?: string }
 ): Promise<Channel | null> {
+  if (!isValidUuid(channelId) || !isValidUuid(tenantId)) return null;
   // Credentials are replaced wholesale rather than merged: a partial update
   // (e.g. rotating just accessToken) should still send the full object the
   // caller wants stored, so a stale key from before can't linger silently.
