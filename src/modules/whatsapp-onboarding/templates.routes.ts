@@ -13,17 +13,33 @@ async function loadWhatsAppChannelOrRespond(
 ): Promise<{ wabaId: string; accessToken: string; apiBaseUrl: string } | null> {
   const channel = await getChannelWithCredentials(req.auth!.tenantId, req.params.channelId);
   if (!channel) {
-    res.sendStatus(404);
+    res.status(404).json({ error: "Channel not found" });
     return null;
   }
-  if (channel.type !== "whatsapp" || !channel.credentials?.wabaId) {
-    res.status(400).json({ error: "Templates are only available for WhatsApp channels onboarded via Embedded Signup" });
+  let credentials = channel.credentials;
+  if (typeof credentials === "string") {
+    try {
+      credentials = JSON.parse(credentials);
+    } catch {
+      credentials = {};
+    }
+  }
+  if (channel.type !== "whatsapp") {
+    res.status(400).json({ error: "Templates are only available for WhatsApp channels" });
+    return null;
+  }
+  if (!credentials?.wabaId) {
+    res.status(400).json({ error: "WhatsApp channel is missing WABA ID. Please reconnect via Embedded Signup." });
+    return null;
+  }
+  if (!credentials?.accessToken) {
+    res.status(400).json({ error: "WhatsApp channel is missing access token. Please reconnect via Embedded Signup." });
     return null;
   }
   return {
-    wabaId: channel.credentials.wabaId,
-    accessToken: channel.credentials.accessToken,
-    apiBaseUrl: channel.credentials.apiBaseUrl || "https://graph.facebook.com/v21.0",
+    wabaId: credentials.wabaId,
+    accessToken: credentials.accessToken,
+    apiBaseUrl: credentials.apiBaseUrl || "https://graph.facebook.com/v21.0",
   };
 }
 
@@ -32,7 +48,13 @@ templatesRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const creds = await loadWhatsAppChannelOrRespond(req, res);
     if (!creds) return;
-    res.json(await listTemplates(creds.wabaId, creds.accessToken, creds.apiBaseUrl));
+    try {
+      const templates = await listTemplates(creds.wabaId, creds.accessToken, creds.apiBaseUrl);
+      res.json(templates);
+    } catch (err: any) {
+      console.error(`[Templates] Failed to list templates for WABA ${creds.wabaId}:`, err?.message || err);
+      res.status(400).json({ error: err instanceof Error ? err.message : "Failed to list templates from Meta" });
+    }
   })
 );
 
