@@ -61,22 +61,22 @@ systemRouter.get(
 systemRouter.get(
   "/logs",
   asyncHandler(async (req: AuthedRequest, res) => {
-    const level = (req.query.level as string)?.toLowerCase();
-    const search = (req.query.search as string)?.toLowerCase();
-    const moduleName = (req.query.module as string)?.toLowerCase();
+    const level = (req.query.level as string)?.toLowerCase()?.trim();
+    const search = (req.query.search as string)?.toLowerCase()?.trim();
+    const moduleName = (req.query.module as string)?.toLowerCase()?.trim();
     const limit = Math.min(Number(req.query.limit) || 200, 1000);
 
     let logs = memoryLogs.getAll().reverse(); // Newest first
 
-    if (level && level !== "all") {
+    if (level && level !== "all" && level !== "undefined" && level !== "null") {
       logs = logs.filter((l) => l.level === level);
     }
 
-    if (moduleName) {
+    if (moduleName && moduleName !== "all" && moduleName !== "undefined" && moduleName !== "null") {
       logs = logs.filter((l) => l.module?.toLowerCase().includes(moduleName));
     }
 
-    if (search) {
+    if (search && search !== "undefined" && search !== "null") {
       logs = logs.filter(
         (l) =>
           l.message.toLowerCase().includes(search) ||
@@ -102,12 +102,12 @@ systemRouter.get(
 systemRouter.get(
   "/errors",
   asyncHandler(async (req: AuthedRequest, res) => {
-    const search = (req.query.search as string)?.toLowerCase();
+    const search = (req.query.search as string)?.toLowerCase()?.trim();
     const limit = Math.min(Number(req.query.limit) || 100, 250);
 
     let errors = memoryErrors.getAll().reverse(); // Newest first
 
-    if (search) {
+    if (search && search !== "undefined" && search !== "null") {
       errors = errors.filter(
         (e) =>
           e.message.toLowerCase().includes(search) ||

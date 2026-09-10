@@ -12,12 +12,19 @@ export interface AuthedRequest extends Request {
  * can never read or write another tenant's rows by tampering with a payload.
  */
 export async function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
+  let token: string | undefined;
   const header = req.headers.authorization;
-  if (!header?.startsWith("Bearer ")) {
+  if (header?.startsWith("Bearer ")) {
+    token = header.slice("Bearer ".length);
+  } else if (typeof req.query.token === "string" && req.query.token && req.query.token !== "undefined" && req.query.token !== "null") {
+    token = req.query.token;
+  }
+
+  if (!token) {
     return res.status(401).json({ error: "Missing bearer token" });
   }
   try {
-    const payload = verifyToken(header.slice("Bearer ".length));
+    const payload = verifyToken(token);
     if (!payload?.userId || !payload?.tenantId) {
       return res.status(401).json({ error: "Invalid token payload" });
     }
