@@ -1,4 +1,5 @@
-import { query, queryOne } from "../../db/pool";
+import { query } from "../../db/pool";
+import { listMessages } from "../messages/messages.service";
 import {
   CopilotSuggestResult,
   CopilotSummarizeResult,
@@ -23,26 +24,12 @@ export class CopilotService {
     const startTime = Date.now();
 
     // 1. Fetch recent messages
-    const recentMessages = await query<{
-      direction: string;
-      type: string;
-      text: string | null;
-      payload: any;
-      created_at: string;
-    }>(
-      `SELECT direction, type, text, payload, created_at
-       FROM messages
-       WHERE tenant_id = $1 AND conversation_id = $2
-       ORDER BY created_at DESC
-       LIMIT 6`,
-      [tenantId, conversationId]
-    );
-
-    const chronological = [...recentMessages].reverse();
-    const formattedHistory = chronological
+    const messagesList = await listMessages(tenantId, conversationId);
+    const recentMessages = messagesList.slice(-6);
+    const formattedHistory = recentMessages
       .map((m) => {
         const sender = m.direction === "inbound" ? "Customer" : "Agent";
-        const content = m.text || (m.payload ? JSON.stringify(m.payload) : "[Media]");
+        const content = m.text || (m.content ? JSON.stringify(m.content) : "[Media]");
         return `${sender}: ${content}`;
       })
       .join("\n");
@@ -165,25 +152,13 @@ Output MUST be a JSON object with this exact structure:
     const startTime = Date.now();
 
     // 1. Fetch conversation history
-    const recentMessages = await query<{
-      direction: string;
-      type: string;
-      text: string | null;
-      payload: any;
-      created_at: string;
-    }>(
-      `SELECT direction, type, text, payload, created_at
-       FROM messages
-       WHERE tenant_id = $1 AND conversation_id = $2
-       ORDER BY created_at ASC
-       LIMIT 20`,
-      [tenantId, conversationId]
-    );
+    const messagesList = await listMessages(tenantId, conversationId);
+    const recentMessages = messagesList.slice(-20);
 
     const formattedHistory = recentMessages
       .map((m) => {
         const sender = m.direction === "inbound" ? "Customer" : "Agent";
-        const content = m.text || (m.payload ? JSON.stringify(m.payload) : "[Media]");
+        const content = m.text || (m.content ? JSON.stringify(m.content) : "[Media]");
         return `${sender}: ${content}`;
       })
       .join("\n");
