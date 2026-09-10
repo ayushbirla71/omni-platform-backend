@@ -4,6 +4,10 @@ import helmet from "helmet";
 import morgan from "morgan";
 import dotenv from "dotenv";
 
+import { logger } from "./utils/logger";
+import { requestLogger } from "./middleware/request-logger";
+import { errorHandler } from "./middleware/error-handler";
+
 import { authRouter } from "./modules/auth/auth.routes";
 import { channelsRouter } from "./modules/channels/channels.routes";
 import { contactsRouter } from "./modules/contacts/contacts.routes";
@@ -18,6 +22,7 @@ import { whatsappOnboardingRouter } from "./modules/whatsapp-onboarding/embedded
 import { templatesRouter } from "./modules/whatsapp-onboarding/templates.routes";
 import { searchRouter } from "./modules/search/search.routes";
 import { mediaRouter } from "./modules/media/media.routes";
+import { systemRouter } from "./modules/system/system.routes";
 import { ensureMediaBucketExists } from "./db/object-storage";
 import { ensureSearchIndices } from "./db/elasticsearch";
 
@@ -30,7 +35,7 @@ const app = express();
 
 app.use(helmet());
 app.use(cors());
-app.use(morgan("dev"));
+app.use(requestLogger);
 /**
  * Capturing the raw bytes here (before parsing) is required for correct
  * webhook signature verification. Meta signs the literal request body it
@@ -63,42 +68,26 @@ app.use("/api/whatsapp-onboarding", whatsappOnboardingRouter);
 app.use("/api/channels", templatesRouter); // adds GET/POST /api/channels/:channelId/templates
 app.use("/api/search", searchRouter);
 app.use("/api/media", mediaRouter);
+app.use("/api/system", systemRouter);
 app.use("/webhooks", webhooksRouter);
 
-/**
- * Safety net. Per-route try/catch that gives a specific, helpful message
- * (like the contactId/channelId checks in deals & campaigns) is still
- * better than this — but every route is now wrapped in asyncHandler
- * (see src/middleware/async-handler.ts), so any route WITHOUT its own
- * try/catch lands here instead of hanging with no response, which is
- * the bug this whole thing exists to prevent.
- */
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error("Unhandled route error:", err);
-  if (res.headersSent) return;
+// Global production-grade error handler
+app.use(errorHandler);
 
-  // Common Postgres constraint violation codes get a real 400 instead of a
-  // generic 500 — see https://www.postgresql.org/docs/current/errcodes-summary.html
-  if (err?.code === "23503") {
-    return res.status(400).json({ error: "Request refers to a record that does not exist" });
-  }
-  if (err?.code === "23505") {
-    return res.status(409).json({ error: "A record with these values already exists" });
-  }
-  if (err?.code === "23514" || err?.code === "22P02") {
-    return res.status(400).json({ error: "Request contains an invalid value" });
-  }
-
-  res.status(500).json({ error: "Internal server error" });
+process.on("unhandledRejection", (reason: any) => {
+  logger.error(
+    "Unhandled promise rejection (check for a raw Promise outside asyncHandler):",
+    reason instanceof Error ? reason : new Error(String(reason))
+  );
 });
 
-process.on("unhandledRejection", (reason) => {
-  console.error("Unhandled promise rejection (should no longer be reachable via a route — check for a raw Promise outside asyncHandler):", reason);
+process.on("uncaughtException", (err: Error) => {
+  logger.fatal("Uncaught Exception thrown in Node process:", err);
 });
 
 const port = Number(process.env.PORT) || 4000;
 app.listen(port, () => {
-  console.log(`omni-platform backend listening on :${port}`);
+  logger.info(`omni-platform backend listening on :${port}`);
 });
 
 /**

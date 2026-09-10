@@ -144,6 +144,7 @@ webhooksRouter.post(
   "/whatsapp/:channelId",
   asyncHandler(async (req, res) => {
     const rawBody = ((req as any).rawBody as Buffer | undefined)?.toString("utf8") ?? JSON.stringify(req.body);
+    console.log("webhook body..", rawBody)
     const { status } = await processInboundWebhook(
       "whatsapp",
       req.params.channelId,

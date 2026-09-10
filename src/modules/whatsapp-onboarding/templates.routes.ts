@@ -3,6 +3,9 @@ import { AuthedRequest, requireAuth, requireRole } from "../../middleware/auth";
 import { asyncHandler } from "../../middleware/async-handler";
 import { getChannelWithCredentials } from "../channels/channels.service";
 import { listTemplates, createTemplate } from "./templates.service";
+import { Logger } from "../../utils/logger";
+
+const log = new Logger("templates");
 
 export const templatesRouter = Router();
 templatesRouter.use(requireAuth);
@@ -52,7 +55,7 @@ templatesRouter.get(
       const templates = await listTemplates(creds.wabaId, creds.accessToken, creds.apiBaseUrl);
       res.json(templates);
     } catch (err: any) {
-      console.error(`[Templates] Failed to list templates for WABA ${creds.wabaId}:`, err?.message || err);
+      log.error(`Failed to list templates for WABA ${creds.wabaId}:`, err);
       res.status(400).json({ error: err instanceof Error ? err.message : "Failed to list templates from Meta" });
     }
   })

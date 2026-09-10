@@ -1,5 +1,8 @@
 import QRCode from "qrcode";
 import { Channel, updateChannel } from "../channels/channels.service";
+import { Logger } from "../../utils/logger";
+
+const log = new Logger("links");
 
 export class UnsupportedChannelError extends Error {}
 
@@ -36,7 +39,7 @@ export async function buildDeepLink(
       if (!rawPhone && credentials?.phoneNumberId && credentials?.accessToken) {
         try {
           const apiBaseUrl = credentials.apiBaseUrl || "https://graph.facebook.com/v21.0";
-          console.log(`[Links] Resolving phone number details from Meta for Phone ID: ${credentials.phoneNumberId}...`);
+          log.info(`Resolving phone number details from Meta for Phone ID: ${credentials.phoneNumberId}...`);
           const res = await fetch(
             `${apiBaseUrl}/${credentials.phoneNumberId}?fields=display_phone_number,verified_name`,
             {
@@ -57,14 +60,14 @@ export async function buildDeepLink(
                 };
                 updateChannel(channel.tenant_id, channel.id, {
                   credentials: updatedCredentials,
-                }).catch((err) => console.warn("[Links] Failed to cache phone number in channel credentials:", err));
+                }).catch((err) => log.warn("Failed to cache phone number in channel credentials:", err));
               }
             }
           } else {
-            console.warn(`[Links] Meta Graph API returned ${res.status} when fetching phone number for deep link`);
+            log.warn(`Meta Graph API returned ${res.status} when fetching phone number for deep link`);
           }
         } catch (err) {
-          console.warn("[Links] Error resolving phone number from Meta Graph API:", err);
+          log.warn("Error resolving phone number from Meta Graph API:", err);
         }
       }
 

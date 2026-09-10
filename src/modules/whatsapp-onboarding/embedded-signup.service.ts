@@ -1,5 +1,8 @@
 import { query, queryOne } from "../../db/pool";
 import { createChannel, updateChannel, Channel } from "../channels/channels.service";
+import { Logger } from "../../utils/logger";
+
+const log = new Logger("meta-onboarding");
 
 /**
  * Meta's Graph API base URL. Overridable so this can be pointed at a local
@@ -48,16 +51,16 @@ export async function exchangeCodeForToken(code: string): Promise<string> {
   url.searchParams.set("client_secret", appSecret);
   url.searchParams.set("code", code);
 
-  console.log(`[Meta Onboarding] Exchanging OAuth code for permanent access token...`);
+  log.info("Exchanging OAuth code for permanent access token...");
   const response = await fetch(url.toString());
   if (!response.ok) {
     const errText = await response.text();
-    console.error(`[Meta Onboarding] Token exchange failed (${response.status}):`, errText);
+    log.error(`Token exchange failed (${response.status}):`, new Error(errText));
     throw new EmbeddedSignupError(`Token exchange failed (${response.status}): ${errText}`);
   }
   const data = (await response.json()) as { access_token?: string };
   if (!data.access_token) throw new EmbeddedSignupError("Token exchange response missing access_token");
-  console.log(`[Meta Onboarding] Token exchange successful!`);
+  log.info("Token exchange successful!");
   return data.access_token;
 }
 
@@ -77,10 +80,10 @@ export async function inspectTokenForWabaAndPhone(
     debugUrl.searchParams.set("input_token", accessToken);
     debugUrl.searchParams.set("access_token", `${appId}|${appSecret}`);
 
-    console.log(`[Meta Onboarding] Inspecting debug_token to discover WABA and Phone Number IDs...`);
+    log.info("Inspecting debug_token to discover WABA and Phone Number IDs...");
     const debugRes = await fetch(debugUrl.toString());
     if (!debugRes.ok) {
-      console.warn(`[Meta Onboarding] debug_token inspect failed (${debugRes.status})`);
+      log.warn(`debug_token inspect failed (${debugRes.status})`);
       return {};
     }
     const debugData = (await debugRes.json()) as any;
@@ -91,7 +94,7 @@ export async function inspectTokenForWabaAndPhone(
     const discoveredWabaId = wabaScope?.target_ids?.[0];
 
     if (discoveredWabaId) {
-      console.log(`[Meta Onboarding] Discovered WABA ID from token: ${discoveredWabaId}`);
+      log.info(`Discovered WABA ID from token: ${discoveredWabaId}`);
       // Fetch phone numbers under this discovered WABA
       const phonesUrl = new URL(`${GRAPH_API_BASE_URL}/${discoveredWabaId}/phone_numbers`);
       phonesUrl.searchParams.set("fields", "id,verified_name,display_phone_number,quality_rating");
@@ -102,7 +105,7 @@ export async function inspectTokenForWabaAndPhone(
         const phonesData = (await phonesRes.json()) as any;
         const firstPhone = phonesData?.data?.[0];
         if (firstPhone) {
-          console.log(`[Meta Onboarding] Discovered Phone Number ID from WABA: ${firstPhone.id}`);
+          log.info(`Discovered Phone Number ID from WABA: ${firstPhone.id}`);
           return {
             wabaId: discoveredWabaId,
             phoneNumberId: firstPhone.id,
@@ -114,7 +117,7 @@ export async function inspectTokenForWabaAndPhone(
       return { wabaId: discoveredWabaId };
     }
   } catch (err: any) {
-    console.warn(`[Meta Onboarding] Error discovering WABA/Phone from token:`, err?.message || err);
+    log.warn("Error discovering WABA/Phone from token:", err?.message || err);
   }
   return {};
 }
@@ -127,7 +130,7 @@ export async function getMetaPhoneNumberDetails(
   phoneNumberId: string,
   accessToken: string
 ): Promise<MetaPhoneDetails | null> {
-  console.log(`[Meta Onboarding] Fetching phone number details for ${phoneNumberId}...`);
+  log.info(`Fetching phone number details for ${phoneNumberId}...`);
   try {
     const url = new URL(`${GRAPH_API_BASE_URL}/${phoneNumberId}`);
     url.searchParams.set(
@@ -139,16 +142,16 @@ export async function getMetaPhoneNumberDetails(
     });
     if (!response.ok) {
       const errText = await response.text();
-      console.warn(`[Meta Onboarding] Failed to get phone number details (${response.status}):`, errText);
+      log.warn(`Failed to get phone number details (${response.status}): ${errText}`);
       return null;
     }
     const data = (await response.json()) as MetaPhoneDetails;
-    console.log(
-      `[Meta Onboarding] Phone details: verified_name="${data.verified_name || ""}", display_phone_number="${data.display_phone_number || ""}"`
+    log.info(
+      `Phone details: verified_name="${data.verified_name || ""}", display_phone_number="${data.display_phone_number || ""}"`
     );
     return data;
   } catch (err: any) {
-    console.warn(`[Meta Onboarding] Error fetching phone number details:`, err?.message || err);
+    log.warn("Error fetching phone number details:", err?.message || err);
     return null;
   }
 }
@@ -160,7 +163,7 @@ export async function getMetaWabaDetails(
   wabaId: string,
   accessToken: string
 ): Promise<MetaWabaDetails | null> {
-  console.log(`[Meta Onboarding] Fetching WABA details for ${wabaId}...`);
+  log.info(`Fetching WABA details for ${wabaId}...`);
   try {
     const url = new URL(`${GRAPH_API_BASE_URL}/${wabaId}`);
     url.searchParams.set("fields", "id,name,timezone_id,currency");
@@ -169,14 +172,14 @@ export async function getMetaWabaDetails(
     });
     if (!response.ok) {
       const errText = await response.text();
-      console.warn(`[Meta Onboarding] Failed to get WABA details (${response.status}):`, errText);
+      log.warn(`Failed to get WABA details (${response.status}): ${errText}`);
       return null;
     }
     const data = (await response.json()) as MetaWabaDetails;
-    console.log(`[Meta Onboarding] WABA details: name="${data.name || ""}"`);
+    log.info(`WABA details: name="${data.name || ""}"`);
     return data;
   } catch (err: any) {
-    console.warn(`[Meta Onboarding] Error fetching WABA details:`, err?.message || err);
+    log.warn("Error fetching WABA details:", err?.message || err);
     return null;
   }
 }
@@ -193,7 +196,7 @@ export async function registerPhoneNumber(
   accessToken: string,
   pin: string = "123456"
 ): Promise<void> {
-  console.log(`[Meta Onboarding] Registering phone number ${phoneNumberId} with Cloud API...`);
+  log.info(`Registering phone number ${phoneNumberId} with Cloud API...`);
   try {
     const response = await fetch(`${GRAPH_API_BASE_URL}/${phoneNumberId}/register`, {
       method: "POST",
@@ -219,21 +222,20 @@ export async function registerPhoneNumber(
           subcode === 33 ||
           code === 100
         ) {
-          console.warn(
-            `[Meta Onboarding] Phone number ${phoneNumberId} registration skipped / already active (code ${code}, subcode ${subcode}):`,
-            msg
+          log.warn(
+            `Phone number ${phoneNumberId} registration skipped / already active (code ${code}, subcode ${subcode}): ${msg}`
           );
           return;
         }
       } catch {
         // Not JSON
       }
-      console.warn(`[Meta Onboarding] Phone number registration non-fatal notice (${response.status}):`, errText);
+      log.warn(`Phone number registration non-fatal notice (${response.status}): ${errText}`);
       return;
     }
-    console.log(`[Meta Onboarding] Phone number ${phoneNumberId} registered successfully!`);
+    log.info(`Phone number ${phoneNumberId} registered successfully!`);
   } catch (err: any) {
-    console.warn(`[Meta Onboarding] Phone number registration non-fatal error:`, err?.message || err);
+    log.warn("Phone number registration non-fatal error:", err?.message || err);
   }
 }
 
@@ -243,7 +245,7 @@ export async function registerPhoneNumber(
  * never receive their inbound messages.
  */
 export async function subscribeAppToWaba(wabaId: string, accessToken: string): Promise<void> {
-  console.log(`[Meta Onboarding] Subscribing app to WABA ${wabaId} webhook events...`);
+  log.info(`Subscribing app to WABA ${wabaId} webhook events...`);
   try {
     const response = await fetch(`${GRAPH_API_BASE_URL}/${wabaId}/subscribed_apps`, {
       method: "POST",
@@ -255,18 +257,18 @@ export async function subscribeAppToWaba(wabaId: string, accessToken: string): P
         const errJson = JSON.parse(errText);
         const msg = errJson?.error?.message || "";
         if (msg.includes("already subscribed") || errJson?.error?.code === 100) {
-          console.warn(`[Meta Onboarding] WABA ${wabaId} is already subscribed or received notice:`, msg);
+          log.warn(`WABA ${wabaId} is already subscribed or received notice: ${msg}`);
           return;
         }
       } catch {
         // Not JSON
       }
-      console.warn(`[Meta Onboarding] Webhook subscription non-fatal notice (${response.status}):`, errText);
+      log.warn(`Webhook subscription non-fatal notice (${response.status}): ${errText}`);
       return;
     }
-    console.log(`[Meta Onboarding] WABA ${wabaId} webhook subscription completed!`);
+    log.info(`WABA ${wabaId} webhook subscription completed!`);
   } catch (err: any) {
-    console.warn(`[Meta Onboarding] Webhook subscription non-fatal error:`, err?.message || err);
+    log.warn("Webhook subscription non-fatal error:", err?.message || err);
   }
 }
 
@@ -355,7 +357,7 @@ export async function completeEmbeddedSignup(params: {
   );
 
   if (existingChannel) {
-    console.log(`[Meta Onboarding] Updating existing channel ${existingChannel.id} with fresh Meta credentials...`);
+    log.info(`Updating existing channel ${existingChannel.id} with fresh Meta credentials...`);
     const updated = await updateChannel(tenantId, existingChannel.id, {
       displayName: finalDisplayName,
       credentials,
@@ -364,7 +366,7 @@ export async function completeEmbeddedSignup(params: {
     return updated!;
   }
 
-  console.log(`[Meta Onboarding] Creating new channel "${finalDisplayName}" for tenant ${tenantId}...`);
+  log.info(`Creating new channel "${finalDisplayName}" for tenant ${tenantId}...`);
   return createChannel({
     tenantId,
     type: "whatsapp",
