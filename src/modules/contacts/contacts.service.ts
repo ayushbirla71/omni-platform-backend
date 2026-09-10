@@ -108,7 +108,7 @@ export async function findOrCreateContact(params: {
     [tenantId, channelId, externalId, name || null, initialAttributes]
   );
 
-  await indexContact({
+  indexContact({
     tenantId,
     contactId: created!.id,
     name: created!.name,
@@ -151,7 +151,7 @@ export async function createContact(params: {
 
   if (!contact) throw new Error("Failed to create contact");
 
-  await indexContact({
+  indexContact({
     tenantId,
     contactId: contact.id,
     name: contact.name,

@@ -250,7 +250,7 @@ export async function sendOutboundMessage(params: {
   }
 
   const message = toMessage(doc);
-  await indexMessage(message).catch((err) => {
+  indexMessage(message).catch((err) => {
     console.error("[messages] Elasticsearch indexing failed (non-fatal):", err);
   });
   return message;
