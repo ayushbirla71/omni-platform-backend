@@ -328,6 +328,9 @@ export async function completeEmbeddedSignup(params: {
     finalDisplayName = "WhatsApp Business";
   }
 
+  const rawPhone = metaPhone?.display_phone_number?.trim() || "";
+  const cleanPhone = rawPhone.replace(/\D/g, "");
+
   const credentials = {
     wabaId,
     phoneNumberId,
@@ -336,6 +339,7 @@ export async function completeEmbeddedSignup(params: {
     onboardedVia: "tech-provider-embedded-signup",
     verifiedName: metaPhone?.verified_name,
     displayPhoneNumber: metaPhone?.display_phone_number,
+    businessPhoneNumber: cleanPhone || metaPhone?.display_phone_number,
     qualityRating: metaPhone?.quality_rating,
     wabaName: metaWaba?.name,
   };

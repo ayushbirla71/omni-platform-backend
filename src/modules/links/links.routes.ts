@@ -12,12 +12,12 @@ linksRouter.get(
   "/:channelId/deep-link",
   asyncHandler(async (req: AuthedRequest, res) => {
     const channel = await getChannelWithCredentials(req.auth!.tenantId, req.params.channelId);
-    if (!channel) return res.sendStatus(404);
+    if (!channel) return res.status(404).json({ error: "Channel not found" });
 
     const prefilledText = typeof req.query.text === "string" ? req.query.text : undefined;
 
     try {
-      const link = buildDeepLink(channel, prefilledText);
+      const link = await buildDeepLink(channel, prefilledText);
       const qrCodeDataUrl = await generateQrCodeDataUrl(link);
       res.json({ link, qrCodeDataUrl });
     } catch (err) {
