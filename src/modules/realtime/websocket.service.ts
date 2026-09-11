@@ -70,6 +70,7 @@ class WebSocketManager {
           userId: uid,
           tenantId: decoded.tenantId,
           role: decoded.role || "agent",
+          email: decoded.email || "",
         };
         socket.tenantId = decoded.tenantId;
         socket.userId = uid;
