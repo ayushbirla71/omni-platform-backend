@@ -9,7 +9,56 @@ export interface Conversation {
   status: string;
   assigned_agent_id: string | null;
   last_message_at: string | null;
+  last_inbound_at?: string | null;
   created_at: string;
+}
+
+export interface SessionWindow {
+  isOpen: boolean;
+  expiresAt: string | null;
+  secondsRemaining: number;
+  isExpired: boolean;
+  lastInboundAt: string | null;
+}
+
+export function computeSessionWindow(
+  lastInboundAt: string | Date | null | undefined,
+  channelType: string = "whatsapp"
+): SessionWindow {
+  if (channelType !== "whatsapp") {
+    return {
+      isOpen: true,
+      expiresAt: null,
+      secondsRemaining: 86400,
+      isExpired: false,
+      lastInboundAt: lastInboundAt ? new Date(lastInboundAt).toISOString() : null,
+    };
+  }
+
+  if (!lastInboundAt) {
+    return {
+      isOpen: false,
+      expiresAt: null,
+      secondsRemaining: 0,
+      isExpired: true,
+      lastInboundAt: null,
+    };
+  }
+
+  const inboundTime = new Date(lastInboundAt).getTime();
+  const now = Date.now();
+  const windowDurationMs = 24 * 60 * 60 * 1000;
+  const expiresTime = inboundTime + windowDurationMs;
+  const secondsRemaining = Math.max(0, Math.floor((expiresTime - now) / 1000));
+  const isExpired = now > expiresTime;
+
+  return {
+    isOpen: !isExpired,
+    expiresAt: new Date(expiresTime).toISOString(),
+    secondsRemaining,
+    isExpired,
+    lastInboundAt: new Date(inboundTime).toISOString(),
+  };
 }
 
 /** One open conversation per contact — reopen it if it exists, otherwise start one. */
@@ -40,6 +89,13 @@ export async function touchLastMessageAt(conversationId: string) {
   await query("UPDATE conversations SET last_message_at = now() WHERE id = $1", [conversationId]);
 }
 
+export async function touchLastInboundAt(conversationId: string, timestamp: Date = new Date()) {
+  await query(
+    "UPDATE conversations SET last_message_at = $1, last_inbound_at = $1 WHERE id = $2",
+    [timestamp, conversationId]
+  );
+}
+
 export async function listConversations(
   tenantId: string,
   status?: string
@@ -61,6 +117,7 @@ export async function listConversations(
       c.status,
       c.assigned_agent_id,
       c.last_message_at,
+      c.last_inbound_at,
       c.created_at,
       ct.name AS contact_name,
       ct.external_id AS contact_external_id,
@@ -111,7 +168,72 @@ export async function listConversations(
     // Non-fatal MongoDB aggregation fallback
   }
 
-  return rows.map((r) => ({
+  return rows.map((r) => {
+    const sessionWindow = computeSessionWindow(r.last_inbound_at, r.channel_type);
+    return {
+      id: r.id,
+      tenantId: r.tenant_id,
+      tenant_id: r.tenant_id,
+      contactId: r.contact_id,
+      contact_id: r.contact_id,
+      channelId: r.channel_id,
+      channel_id: r.channel_id,
+      status: r.status,
+      assignedAgentUserId: r.assigned_agent_id,
+      assigned_agent_id: r.assigned_agent_id,
+      lastMessageAt: r.last_message_at ? new Date(r.last_message_at).toISOString() : null,
+      last_message_at: r.last_message_at ? new Date(r.last_message_at).toISOString() : null,
+      lastInboundAt: r.last_inbound_at ? new Date(r.last_inbound_at).toISOString() : null,
+      last_inbound_at: r.last_inbound_at ? new Date(r.last_inbound_at).toISOString() : null,
+      sessionWindow,
+      session_window: sessionWindow,
+      createdAt: r.created_at ? new Date(r.created_at).toISOString() : null,
+      created_at: r.created_at ? new Date(r.created_at).toISOString() : null,
+      contactName: r.contact_name || null,
+      contact_name: r.contact_name || null,
+      contactExternalId: r.contact_external_id || null,
+      contact_external_id: r.contact_external_id || null,
+      channelType: r.channel_type || "whatsapp",
+      channel_type: r.channel_type || "whatsapp",
+      channelDisplayName: r.channel_display_name || null,
+      channel_display_name: r.channel_display_name || null,
+      lastMessageText: latestMessageMap[r.id] || "",
+      last_message_text: latestMessageMap[r.id] || "",
+    };
+  });
+}
+
+export async function getConversation(
+  tenantId: string,
+  conversationId: string
+): Promise<any | null> {
+  const sql = `
+    SELECT
+      c.id,
+      c.tenant_id,
+      c.contact_id,
+      c.channel_id,
+      c.status,
+      c.assigned_agent_id,
+      c.last_message_at,
+      c.last_inbound_at,
+      c.created_at,
+      ct.name AS contact_name,
+      ct.external_id AS contact_external_id,
+      ch.type AS channel_type,
+      ch.display_name AS channel_display_name
+    FROM conversations c
+    LEFT JOIN contacts ct ON ct.id = c.contact_id
+    LEFT JOIN channels ch ON ch.id = c.channel_id
+    WHERE c.id = $1 AND c.tenant_id = $2
+  `;
+
+  const r = await queryOne<any>(sql, [conversationId, tenantId]);
+  if (!r) return null;
+
+  const sessionWindow = computeSessionWindow(r.last_inbound_at, r.channel_type);
+
+  return {
     id: r.id,
     tenantId: r.tenant_id,
     tenant_id: r.tenant_id,
@@ -124,6 +246,10 @@ export async function listConversations(
     assigned_agent_id: r.assigned_agent_id,
     lastMessageAt: r.last_message_at ? new Date(r.last_message_at).toISOString() : null,
     last_message_at: r.last_message_at ? new Date(r.last_message_at).toISOString() : null,
+    lastInboundAt: r.last_inbound_at ? new Date(r.last_inbound_at).toISOString() : null,
+    last_inbound_at: r.last_inbound_at ? new Date(r.last_inbound_at).toISOString() : null,
+    sessionWindow,
+    session_window: sessionWindow,
     createdAt: r.created_at ? new Date(r.created_at).toISOString() : null,
     created_at: r.created_at ? new Date(r.created_at).toISOString() : null,
     contactName: r.contact_name || null,
@@ -134,9 +260,7 @@ export async function listConversations(
     channel_type: r.channel_type || "whatsapp",
     channelDisplayName: r.channel_display_name || null,
     channel_display_name: r.channel_display_name || null,
-    lastMessageText: latestMessageMap[r.id] || "",
-    last_message_text: latestMessageMap[r.id] || "",
-  }));
+  };
 }
 
 export async function assignAgent(

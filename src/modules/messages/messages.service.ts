@@ -1,9 +1,10 @@
 import { v4 as uuidv4 } from "uuid";
 import { getMongoDb } from "../../db/mongo";
 import { query, queryOne } from "../../db/pool";
-import { touchLastMessageAt } from "../conversations/conversations.service";
+import { touchLastMessageAt, touchLastInboundAt } from "../conversations/conversations.service";
 import { getChannelWithCredentials } from "../channels/channels.service";
 import { getAdapter } from "../channels/channel-registry";
+import { getMediaDownloadUrl } from "../../db/object-storage";
 import { indexMessage } from "../search/search.service";
 import { emitRealtimeEvent } from "../realtime/websocket.service";
 import { dispatchWebhookEvent } from "../webhooks/outgoing-webhooks.service";
@@ -159,7 +160,7 @@ export async function recordInboundMessage(params: {
     providerMessageId,
   };
   await collection.insertOne(doc);
-  await touchLastMessageAt(conversationId);
+  await touchLastInboundAt(conversationId, sentAt);
   const message = toMessage(doc);
   emitRealtimeEvent(tenantId, "message:new", message, { conversationId }).catch((err) => {
     console.error("[messages] Realtime event emit failed (non-fatal):", err);
@@ -184,14 +185,30 @@ export async function sendOutboundMessage(params: {
   conversationId: string;
   senderUserId?: string;
   text?: string;
-  type?: "text" | "template";
+  type?: "text" | "template" | "image" | "document" | "audio" | "video" | "sticker";
+  mediaUrl?: string;
+  mediaStorageKey?: string;
+  filename?: string;
   templateName?: string;
   templateLanguage?: string;
   templateParams?: Record<string, string>;
   headerType?: "TEXT" | "IMAGE" | "DOCUMENT" | "VIDEO";
   headerValue?: string;
 }): Promise<Message> {
-  const { tenantId, conversationId, senderUserId, text, type = "text", templateName, templateLanguage, templateParams, headerType, headerValue } = params;
+  const {
+    tenantId,
+    conversationId,
+    senderUserId,
+    text,
+    type = "text",
+    filename,
+    templateName,
+    templateLanguage,
+    templateParams,
+    headerType,
+    headerValue,
+  } = params;
+  let { mediaUrl, mediaStorageKey } = params;
 
   const conversation = await queryOne<{ channel_id: string; contact_external_id: string }>(
     `SELECT c.channel_id, ct.external_id AS contact_external_id
@@ -225,6 +242,24 @@ export async function sendOutboundMessage(params: {
       channel.credentials || {}
     );
     providerMessageId = result.providerMessageId;
+  } else if (["image", "document", "audio", "video", "sticker"].includes(type)) {
+    // Media message sending
+    if (!mediaUrl && mediaStorageKey) {
+      mediaUrl = await getMediaDownloadUrl(mediaStorageKey);
+    }
+    if (!mediaUrl) throw new Error(`mediaUrl or mediaStorageKey is required for ${type} messages`);
+
+    const result = await adapter.send(
+      {
+        toExternalContactId: conversation.contact_external_id,
+        type: type as any,
+        text,
+        mediaUrl,
+        filename,
+      },
+      channel.credentials || {}
+    );
+    providerMessageId = result.providerMessageId;
   } else {
     // Send plain text message
     if (!text) throw new Error("text is required for text messages");
@@ -235,15 +270,22 @@ export async function sendOutboundMessage(params: {
     providerMessageId = result.providerMessageId;
   }
 
+  let content: Record<string, any>;
+  if (type === "template") {
+    content = { templateName, templateLanguage, templateParams, headerType, headerValue };
+  } else if (type === "text") {
+    content = { text };
+  } else {
+    content = { text, mediaUrl, mediaStorageKey, filename };
+  }
+
   const doc: MessageDoc = {
     id: uuidv4(),
     tenantId,
     conversationId,
     direction: "outbound",
-    type: type === "template" ? "template" : "text",
-    content: type === "template"
-      ? { templateName, templateLanguage, templateParams, headerType, headerValue }
-      : { text },
+    type,
+    content,
     senderUserId: senderUserId || null,
     sentAt: new Date(),
     providerMessageId,
