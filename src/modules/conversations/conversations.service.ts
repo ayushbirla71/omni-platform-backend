@@ -45,7 +45,18 @@ export function computeSessionWindow(
     };
   }
 
-  const inboundTime = new Date(lastInboundAt).getTime();
+  const inboundDate = new Date(lastInboundAt);
+  const inboundTime = inboundDate.getTime();
+  if (isNaN(inboundTime)) {
+    return {
+      isOpen: false,
+      expiresAt: null,
+      secondsRemaining: 0,
+      isExpired: true,
+      lastInboundAt: null,
+    };
+  }
+
   const now = Date.now();
   const windowDurationMs = 24 * 60 * 60 * 1000;
   const expiresTime = inboundTime + windowDurationMs;

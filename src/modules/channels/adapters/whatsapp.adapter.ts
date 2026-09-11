@@ -76,6 +76,14 @@ export class WhatsAppAdapter implements ChannelAdapter {
             text = `🛒 Order received: ${itemsDesc || "Cart items"}${msg.order?.text ? ` (Note: "${msg.order.text}")` : ""}`;
           }
 
+          let receivedAt = new Date();
+          if (msg.timestamp) {
+            const ts = Number(msg.timestamp);
+            if (!isNaN(ts) && ts > 0) {
+              receivedAt = ts > 1e11 ? new Date(ts) : new Date(ts * 1000);
+            }
+          }
+
           messages.push({
             channelExternalContactId: msg.from,
             contactName,
@@ -84,7 +92,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
             mediaUrl: mediaId, // media needs a follow-up media-download call
             providerMessageId: msg.id,
             raw: msg,
-            receivedAt: new Date(Number(msg.timestamp) * 1000),
+            receivedAt,
           });
         }
       }
@@ -105,13 +113,20 @@ export class WhatsAppAdapter implements ChannelAdapter {
         // Status updates come in value.statuses array (separate from value.messages)
         for (const status of value?.statuses ?? []) {
           const errorInfo = status.errors?.[0];
+          let statusTimestamp = new Date();
+          if (status.timestamp) {
+            const ts = Number(status.timestamp);
+            if (!isNaN(ts) && ts > 0) {
+              statusTimestamp = ts > 1e11 ? new Date(ts) : new Date(ts * 1000);
+            }
+          }
 
           statusUpdates.push({
             providerMessageId: status.id,
             status: mapStatusValue(status.status),
             errorCode: errorInfo?.code ? String(errorInfo.code) : undefined,
             errorMessage: errorInfo?.message || errorInfo?.title || errorInfo?.error_data?.details || undefined,
-            timestamp: new Date(Number(status.timestamp) * 1000),
+            timestamp: statusTimestamp,
           });
         }
       }

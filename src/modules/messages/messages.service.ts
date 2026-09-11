@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getMongoDb } from "../../db/mongo";
 import { query, queryOne } from "../../db/pool";
-import { touchLastMessageAt, touchLastInboundAt } from "../conversations/conversations.service";
+import { touchLastMessageAt, touchLastInboundAt, getConversation } from "../conversations/conversations.service";
 import { getChannelWithCredentials } from "../channels/channels.service";
 import { getAdapter } from "../channels/channel-registry";
 import { getMediaDownloadUrl } from "../../db/object-storage";
@@ -165,6 +165,13 @@ export async function recordInboundMessage(params: {
   emitRealtimeEvent(tenantId, "message:new", message, { conversationId }).catch((err) => {
     console.error("[messages] Realtime event emit failed (non-fatal):", err);
   });
+  getConversation(tenantId, conversationId)
+    .then((updatedConv) => {
+      if (updatedConv) {
+        emitRealtimeEvent(tenantId, "conversation:update", updatedConv, { conversationId }).catch(() => {});
+      }
+    })
+    .catch(() => {});
   dispatchWebhookEvent(tenantId, "message.received", message).catch((err) => {
     console.error("[messages] Webhook dispatch failed (non-fatal):", err);
   });
