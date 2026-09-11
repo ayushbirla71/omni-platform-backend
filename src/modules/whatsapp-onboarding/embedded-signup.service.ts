@@ -1,5 +1,5 @@
 import { query, queryOne } from "../../db/pool";
-import { createChannel, updateChannel, Channel } from "../channels/channels.service";
+import { createChannel, updateChannel, findWhatsAppChannel, Channel } from "../channels/channels.service";
 import { Logger } from "../../utils/logger";
 
 const log = new Logger("meta-onboarding");
@@ -346,15 +346,12 @@ export async function completeEmbeddedSignup(params: {
     wabaName: metaWaba?.name,
   };
 
-  // Check if channel already exists for this tenant and phone number / WABA
-  const existingChannel = await queryOne<Channel>(
-    `SELECT * FROM channels
-     WHERE tenant_id = $1
-       AND type = 'whatsapp'
-       AND (credentials->>'phoneNumberId' = $2 OR credentials->>'wabaId' = $3)
-     LIMIT 1`,
-    [tenantId, phoneNumberId, wabaId]
-  );
+  // Check if channel already exists for this tenant and phone number / WABA using decrypted credentials
+  const existingChannel = await findWhatsAppChannel({
+    tenantId,
+    phoneNumberId,
+    wabaId,
+  });
 
   if (existingChannel) {
     log.info(`Updating existing channel ${existingChannel.id} with fresh Meta credentials...`);

@@ -304,6 +304,98 @@ export async function deleteChannel(
   return result.length > 0;
 }
 
+/**
+ * Searches WhatsApp channels by decrypted credentials (phone number ID or WABA ID).
+ * Since channel credentials are encrypted with AES-256-GCM at rest, SQL JSON operators
+ * cannot query fields inside the ciphertext payload. This helper decrypts credentials
+ * in-memory to accurately match incoming webhooks and embedded signup callbacks.
+ */
+export async function findWhatsAppChannel(identifiers: {
+  phoneNumberId?: string;
+  wabaId?: string;
+  tenantId?: string;
+}): Promise<Channel | null> {
+  const { phoneNumberId, wabaId, tenantId } = identifiers;
+  if (!phoneNumberId && !wabaId) return null;
+
+  let sql = "SELECT * FROM channels WHERE type = 'whatsapp'";
+  const params: any[] = [];
+  if (tenantId) {
+    if (!isValidUuid(tenantId)) return null;
+    params.push(tenantId);
+    sql += ` AND tenant_id = $${params.length}`;
+  }
+  sql += " ORDER BY created_at DESC";
+
+  const rows = await query<Channel>(sql, params);
+  for (const row of rows) {
+    let creds: Record<string, any> = {};
+    try {
+      creds = row.credentials ? decryptObject(row.credentials) : {};
+    } catch {
+      creds = {};
+    }
+
+    if (
+      phoneNumberId &&
+      (creds.phoneNumberId === phoneNumberId ||
+        creds.businessPhoneNumber === phoneNumberId ||
+        creds.displayPhoneNumber === phoneNumberId)
+    ) {
+      row.credentials = creds;
+      return row;
+    }
+    if (wabaId && creds.wabaId === wabaId) {
+      row.credentials = creds;
+      return row;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Searches Telegram channels by decrypted credentials (bot ID or username).
+ */
+export async function findTelegramChannel(identifiers: {
+  botUsername?: string;
+  botId?: string;
+  tenantId?: string;
+}): Promise<Channel | null> {
+  const { botUsername, botId, tenantId } = identifiers;
+  if (!botUsername && !botId) return null;
+
+  let sql = "SELECT * FROM channels WHERE type = 'telegram'";
+  const params: any[] = [];
+  if (tenantId) {
+    if (!isValidUuid(tenantId)) return null;
+    params.push(tenantId);
+    sql += ` AND tenant_id = $${params.length}`;
+  }
+  sql += " ORDER BY created_at DESC";
+
+  const rows = await query<Channel>(sql, params);
+  for (const row of rows) {
+    let creds: Record<string, any> = {};
+    try {
+      creds = row.credentials ? decryptObject(row.credentials) : {};
+    } catch {
+      creds = {};
+    }
+
+    if (botId && (creds.botId === botId || creds.bot_id === botId)) {
+      row.credentials = creds;
+      return row;
+    }
+    if (botUsername && (creds.botUsername === botUsername || creds.bot_username === botUsername)) {
+      row.credentials = creds;
+      return row;
+    }
+  }
+
+  return null;
+}
+
 /** Same tenant-agnostic-caller exception as getCampaignByIdUnscoped — see that function's comment. */
 export async function getChannelByIdUnscoped(channelId: string): Promise<Channel | null> {
   if (!isValidUuid(channelId)) return null;

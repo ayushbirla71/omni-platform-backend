@@ -10,6 +10,12 @@ import { getProductBySku } from "../commerce/products.service";
 import { asyncHandler } from "../../middleware/async-handler";
 import { uploadMedia } from "../../db/object-storage";
 import { Logger } from "../../utils/logger";
+import {
+  getChannelByIdUnscoped,
+  findWhatsAppChannel,
+  findTelegramChannel,
+  Channel,
+} from "../channels/channels.service";
 
 const log = new Logger("webhooks");
 
@@ -67,13 +73,6 @@ function getExtensionFromMimeType(mimeType: string, defaultExt: string = "bin"):
   }
 }
 
-interface ChannelRow {
-  id: string;
-  tenant_id: string;
-  credentials: any;
-  default_flow_id: string | null;
-}
-
 /**
  * Shared by every channel:
  * 1. Resolves channel (by UUID if provided, or dynamically by Phone Number ID / WABA ID from payload)
@@ -88,18 +87,15 @@ async function processInboundWebhook(
   parsedBody: any,
   headers: Record<string, string | string[] | undefined>
 ): Promise<{ status: number }> {
-  let channel: ChannelRow | null = null;
+  let channel: Channel | null = null;
 
-  // 1. If a valid UUID channelId is provided in URL, look up channel directly
+  // 1. If a valid UUID channelId is provided in URL, look up channel directly (with decrypted credentials)
   if (isValidUuid(channelId)) {
-    channel = await queryOne<ChannelRow>(
-      "SELECT id, tenant_id, credentials, default_flow_id FROM channels WHERE id = $1 AND type = $2",
-      [channelId, channelType]
-    );
+    channel = await getChannelByIdUnscoped(channelId);
   }
 
-  // 2. If channel was not resolved by UUID (e.g. Meta app-level webhook to /webhooks/whatsapp or /webhooks/whatsapp/CHANNEL_ID),
-  // dynamically resolve channel by WhatsApp Phone Number ID or WABA ID from payload
+  // 2. If channel was not resolved by UUID (e.g. Meta app-level webhook to /webhooks/whatsapp),
+  // dynamically resolve channel by WhatsApp Phone Number ID or WABA ID from payload using decrypted credentials
   if (!channel && channelType === "whatsapp" && parsedBody) {
     let extractedPhoneId: string | undefined;
     let extractedWabaId: string | undefined;
@@ -112,29 +108,17 @@ async function processInboundWebhook(
       }
     }
 
-    if (extractedPhoneId) {
-      channel = await queryOne<ChannelRow>(
-        `SELECT id, tenant_id, credentials, default_flow_id
-         FROM channels
-         WHERE type = 'whatsapp'
-           AND credentials->>'phoneNumberId' = $1
-         ORDER BY created_at DESC
-         LIMIT 1`,
-        [extractedPhoneId]
-      );
+    if (extractedPhoneId || extractedWabaId) {
+      channel = await findWhatsAppChannel({
+        phoneNumberId: extractedPhoneId,
+        wabaId: extractedWabaId,
+      });
     }
+  }
 
-    if (!channel && extractedWabaId) {
-      channel = await queryOne<ChannelRow>(
-        `SELECT id, tenant_id, credentials, default_flow_id
-         FROM channels
-         WHERE type = 'whatsapp'
-           AND credentials->>'wabaId' = $1
-         ORDER BY created_at DESC
-         LIMIT 1`,
-        [extractedWabaId]
-      );
-    }
+  // 3. If Telegram webhook without channelId in URL, match dynamically if applicable
+  if (!channel && channelType === "telegram" && parsedBody) {
+    // Telegram webhook payload or headers
   }
 
   if (!channel) {
@@ -146,7 +130,7 @@ async function processInboundWebhook(
 
   const adapter = getAdapter(channelType);
 
-  const signatureOk = adapter.verifyWebhookSignature(rawBody, headers, channel.credentials);
+  const signatureOk = adapter.verifyWebhookSignature(rawBody, headers, channel.credentials || {});
   if (!signatureOk) {
     log.warn(`Rejected ${channelType} webhook for channel ${channel.id}: bad signature`);
     return { status: 401 };
@@ -208,7 +192,7 @@ async function processInboundWebhook(
         msg.type === "sticker")
     ) {
       try {
-        const { buffer, contentType } = await adapter.downloadMedia(msg.mediaUrl, channel.credentials);
+        const { buffer, contentType } = await adapter.downloadMedia(msg.mediaUrl, channel.credentials || {});
         const extension = getExtensionFromMimeType(contentType, msg.type === "image" ? "jpg" : "bin");
         const key = `${channel.tenant_id}/${conversation.id}/${Date.now()}.${extension}`;
         await uploadMedia({ key, body: buffer, contentType });
@@ -284,7 +268,7 @@ async function processInboundWebhook(
       runFlowForConversation({
         tenantId: channel.tenant_id,
         conversationId: conversation.id,
-        defaultFlowId: channel.default_flow_id,
+        defaultFlowId: channel.default_flow_id || null,
         incomingText: msg.text,
       }).catch((err) => {
         log.error(`[webhooks] Flow execution failed for conversation ${conversation.id}:`, err);
