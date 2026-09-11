@@ -1,7 +1,15 @@
 import { Router } from "express";
 import { AuthedRequest, requireAuth, requireRole } from "../../middleware/auth";
 import { asyncHandler } from "../../middleware/async-handler";
-import { createChannel, listChannels, setDefaultFlow, updateChannel } from "./channels.service";
+import {
+  createChannel,
+  listChannels,
+  setDefaultFlow,
+  updateChannel,
+  getChannelSettings,
+  syncChannelMetadata,
+  deleteChannel,
+} from "./channels.service";
 
 export const channelsRouter = Router();
 channelsRouter.use(requireAuth);
@@ -11,6 +19,35 @@ channelsRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const channels = await listChannels(req.auth!.tenantId);
     res.json(channels);
+  })
+);
+
+channelsRouter.get(
+  "/:id/settings",
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const settings = await getChannelSettings(req.auth!.tenantId, req.params.id);
+    if (!settings) return res.status(404).json({ error: "Channel not found" });
+    res.json(settings);
+  })
+);
+
+channelsRouter.post(
+  "/:id/sync",
+  requireRole("owner", "admin"),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const settings = await syncChannelMetadata(req.auth!.tenantId, req.params.id);
+    if (!settings) return res.status(404).json({ error: "Channel not found" });
+    res.json(settings);
+  })
+);
+
+channelsRouter.delete(
+  "/:id",
+  requireRole("owner", "admin"),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const deleted = await deleteChannel(req.auth!.tenantId, req.params.id);
+    if (!deleted) return res.status(404).json({ error: "Channel not found" });
+    res.json({ success: true });
   })
 );
 

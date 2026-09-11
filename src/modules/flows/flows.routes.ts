@@ -89,7 +89,7 @@ flowsRouter.post(
     const existing = await getFlow(req.auth!.tenantId, req.params.id);
     if (!existing) return res.sendStatus(404);
 
-    const errors = validateFlowDefinition(existing.definition);
+    const errors = validateFlowDefinition(existing.definition, { isPublishing: true });
     if (errors.length) {
       return res.status(400).json({ error: "Cannot publish an invalid flow", errors });
     }

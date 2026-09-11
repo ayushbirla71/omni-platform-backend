@@ -111,7 +111,7 @@ export type WaitNode = {
 export type AIAgentNode = {
   id: string;
   type: "ai_agent";
-  knowledgeBaseId: string;
+  knowledgeBaseId?: string;
   queryVariable?: string; // variable containing user query (default: last incoming reply or 'query')
   prompt?: string; // custom system prompt override
   saveResponseAs?: string; // variable to store AI answer (default: 'ai_response')
@@ -169,7 +169,10 @@ export interface FlowDefinition {
   edges?: FlowEdge[];
 }
 
-export function validateFlowDefinition(def: FlowDefinition): string[] {
+export function validateFlowDefinition(
+  def: FlowDefinition,
+  options?: { isPublishing?: boolean }
+): string[] {
   const errors: string[] = [];
 
   if (!def || typeof def !== "object") {
@@ -243,7 +246,9 @@ export function validateFlowDefinition(def: FlowDefinition): string[] {
         checkNext(node.next);
         break;
       case "ai_agent":
-        if (!node.knowledgeBaseId) errors.push(`Node "${node.id}" (ai_agent) is missing knowledgeBaseId`);
+        if (options?.isPublishing && !node.knowledgeBaseId) {
+          errors.push(`Node "${node.id}" (ai_agent) requires a selected Knowledge Base before publishing`);
+        }
         checkNext(node.next);
         checkNext(node.onFallback);
         node.ports?.forEach((p) => checkNext(p.next));

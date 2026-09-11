@@ -78,7 +78,7 @@ export async function sendBroadcastNow(
         const text = interpolate(definition.text || "", { name: recipient.name });
         await adapter.send(
           { toExternalContactId: recipient.external_id, type: "text", text },
-          channel.credentials
+          channel.credentials || {}
         );
         await markBroadcastSent(recipient.id);
         sent++;
@@ -131,7 +131,7 @@ export async function processDueDripSteps(): Promise<{ processed: number; failed
       const text = interpolate(step.text, { name: recipient.name });
       await adapter.send(
         { toExternalContactId: recipient.external_id, type: "text", text },
-        channel.credentials
+        channel.credentials || {}
       );
 
       const nextStepIndex = recipient.current_step + 1;

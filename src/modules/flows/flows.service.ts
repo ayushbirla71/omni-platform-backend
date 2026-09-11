@@ -8,6 +8,7 @@ export interface Flow {
   definition: FlowDefinition;
   status: "draft" | "published";
   version: number;
+  deleted_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -42,35 +43,61 @@ export async function updateFlowDefinition(
 ): Promise<Flow | null> {
   return queryOne<Flow>(
     `UPDATE flows SET definition = $1, updated_at = now()
-     WHERE id = $2 AND tenant_id = $3 RETURNING *`,
+     WHERE id = $2 AND tenant_id = $3 AND deleted_at IS NULL RETURNING *`,
     [definition, flowId, tenantId]
   );
 }
 
 export async function deleteFlow(tenantId: string, flowId: string): Promise<boolean> {
+  // Soft delete the flow record
   const res = await query(
-    `DELETE FROM flows WHERE id = $1 AND tenant_id = $2 RETURNING id`,
+    `UPDATE flows
+     SET deleted_at = now(), updated_at = now()
+     WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+     RETURNING id`,
     [flowId, tenantId]
   );
-  return res.length > 0;
+  if (res.length === 0) return false;
+
+  // Detach / unlink any channels where this flow is configured as default
+  await query(
+    `UPDATE channels
+     SET default_flow_id = NULL
+     WHERE tenant_id = $1 AND default_flow_id = $2`,
+    [tenantId, flowId]
+  );
+
+  // Terminate any in-flight running flow executions for this flow
+  await query(
+    `UPDATE flow_runs
+     SET status = 'completed', updated_at = now()
+     WHERE flow_id = $1 AND status = 'running'`,
+    [flowId]
+  );
+
+  return true;
 }
 
 export async function publishFlow(tenantId: string, flowId: string): Promise<Flow | null> {
   return queryOne<Flow>(
     `UPDATE flows SET status = 'published', version = version + 1, updated_at = now()
-     WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+     WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL RETURNING *`,
     [flowId, tenantId]
   );
 }
 
 export async function getFlow(tenantId: string, flowId: string): Promise<Flow | null> {
-  return queryOne<Flow>("SELECT * FROM flows WHERE id = $1 AND tenant_id = $2", [flowId, tenantId]);
+  return queryOne<Flow>(
+    "SELECT * FROM flows WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL",
+    [flowId, tenantId]
+  );
 }
 
 export async function listFlows(tenantId: string): Promise<Flow[]> {
-  return query<Flow>("SELECT * FROM flows WHERE tenant_id = $1 ORDER BY updated_at DESC", [
-    tenantId,
-  ]);
+  return query<Flow>(
+    "SELECT * FROM flows WHERE tenant_id = $1 AND deleted_at IS NULL ORDER BY updated_at DESC",
+    [tenantId]
+  );
 }
 
 export async function getActiveFlowRun(conversationId: string): Promise<FlowRun | null> {

@@ -296,8 +296,9 @@ export async function advanceFlow(
         const userQuery = queryVar
           ? String(variables[queryVar] ?? "")
           : String(incomingText ?? variables["last_message"] ?? variables["query"] ?? "");
+        const kbId = (node as AIAgentNode).knowledgeBaseId;
 
-        if (context?.tenantId && (node as AIAgentNode).knowledgeBaseId && userQuery.trim()) {
+        if (context?.tenantId && kbId && userQuery.trim()) {
           try {
             const interpolatedQuery = interpolate(userQuery, variables);
             const customPrompt = (node as AIAgentNode).prompt
@@ -306,7 +307,7 @@ export async function advanceFlow(
 
             const ragResult = await RAGService.queryKnowledgeBase({
               tenantId: context.tenantId,
-              knowledgeBaseId: (node as AIAgentNode).knowledgeBaseId,
+              knowledgeBaseId: kbId,
               query: interpolatedQuery,
               conversationId: context.conversationId,
               customSystemPrompt: customPrompt,

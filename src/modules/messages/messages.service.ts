@@ -222,7 +222,7 @@ export async function sendOutboundMessage(params: {
         headerType,
         headerValue,
       },
-      channel.credentials
+      channel.credentials || {}
     );
     providerMessageId = result.providerMessageId;
   } else {
@@ -230,7 +230,7 @@ export async function sendOutboundMessage(params: {
     if (!text) throw new Error("text is required for text messages");
     const result = await adapter.send(
       { toExternalContactId: conversation.contact_external_id, type: "text", text },
-      channel.credentials
+      channel.credentials || {}
     );
     providerMessageId = result.providerMessageId;
   }
