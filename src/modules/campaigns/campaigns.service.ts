@@ -12,7 +12,13 @@ export interface Campaign {
   status: "draft" | "sending" | "completed";
   total_recipients?: number;
   sent_count?: number;
+  completed_count?: number;
   failed_count?: number;
+  pending_count?: number;
+  channel_type?: string;
+  channel_display_name?: string;
+  flow_name?: string;
+  flow_status?: string;
   created_at: string;
 }
 
@@ -25,6 +31,11 @@ export interface CampaignRecipient {
   next_send_at: string;
   last_error: string | null;
   updated_at: string;
+  contact_name?: string | null;
+  contact_external_id?: string;
+  contact_email?: string | null;
+  contact_attributes?: Record<string, any>;
+  conversation_id?: string | null;
 }
 
 /**
@@ -80,17 +91,40 @@ export async function createCampaign(params: {
 }
 
 export async function getCampaign(tenantId: string, campaignId: string): Promise<Campaign | null> {
-  const campaign = await queryOne<Campaign>(
-    `SELECT c.*,
-       COUNT(cr.id)::int as total_recipients,
-       COUNT(CASE WHEN cr.status = 'sent' OR cr.status = 'completed' THEN 1 END)::int as sent_count,
-       COUNT(CASE WHEN cr.status = 'failed' THEN 1 END)::int as failed_count
-     FROM campaigns c
-     LEFT JOIN campaign_recipients cr ON cr.campaign_id = c.id
-     WHERE c.id = $1 AND c.tenant_id = $2
-     GROUP BY c.id`,
-    [campaignId, tenantId]
-  );
+  const sql = `
+    SELECT
+      c.*,
+      ch.type AS channel_type,
+      ch.display_name AS channel_display_name,
+      COUNT(cr.id)::int as total_recipients,
+      COUNT(CASE WHEN cr.status = 'sent' THEN 1 END)::int as sent_count,
+      COUNT(CASE WHEN cr.status = 'completed' THEN 1 END)::int as completed_count,
+      COUNT(CASE WHEN cr.status = 'failed' THEN 1 END)::int as failed_count,
+      COUNT(CASE WHEN cr.status = 'pending' THEN 1 END)::int as pending_count
+    FROM campaigns c
+    LEFT JOIN channels ch ON ch.id = c.channel_id
+    LEFT JOIN campaign_recipients cr ON cr.campaign_id = c.id
+    WHERE c.id = $1 AND c.tenant_id = $2
+    GROUP BY c.id, ch.type, ch.display_name
+  `;
+  const campaign = await queryOne<Campaign>(sql, [campaignId, tenantId]);
+  if (!campaign) return null;
+
+  // If this is a flow campaign or has a flowId, look up the flow name and status
+  const flowId = (campaign.definition as any)?.flowId;
+  if (flowId && typeof flowId === "string") {
+    try {
+      const flow = await queryOne<{ name: string; status: string }>(
+        "SELECT name, status FROM flows WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL",
+        [flowId, tenantId]
+      );
+      if (flow) {
+        campaign.flow_name = flow.name;
+        campaign.flow_status = flow.status;
+      }
+    } catch {}
+  }
+
   return campaign;
 }
 
@@ -115,16 +149,147 @@ export async function getCampaignByIdUnscoped(campaignId: string): Promise<Campa
 export async function listCampaigns(tenantId: string): Promise<Campaign[]> {
   return query<Campaign>(
     `SELECT c.*,
+       ch.type AS channel_type,
+       ch.display_name AS channel_display_name,
        COUNT(cr.id)::int as total_recipients,
-       COUNT(CASE WHEN cr.status = 'sent' OR cr.status = 'completed' THEN 1 END)::int as sent_count,
-       COUNT(CASE WHEN cr.status = 'failed' THEN 1 END)::int as failed_count
+       COUNT(CASE WHEN cr.status = 'sent' THEN 1 END)::int as sent_count,
+       COUNT(CASE WHEN cr.status = 'completed' THEN 1 END)::int as completed_count,
+       COUNT(CASE WHEN cr.status = 'failed' THEN 1 END)::int as failed_count,
+       COUNT(CASE WHEN cr.status = 'pending' THEN 1 END)::int as pending_count
      FROM campaigns c
+     LEFT JOIN channels ch ON ch.id = c.channel_id
      LEFT JOIN campaign_recipients cr ON cr.campaign_id = c.id
      WHERE c.tenant_id = $1
-     GROUP BY c.id
+     GROUP BY c.id, ch.type, ch.display_name
      ORDER BY c.created_at DESC`,
     [tenantId]
   );
+}
+
+export async function getCampaignRecipients(
+  tenantId: string,
+  campaignId: string,
+  options: { status?: string; search?: string; limit?: number; offset?: number } = {}
+): Promise<{ recipients: CampaignRecipient[]; total: number }> {
+  // First verify campaign belongs to tenant
+  const campaign = await queryOne<{ id: string; channel_id: string }>(
+    "SELECT id, channel_id FROM campaigns WHERE id = $1 AND tenant_id = $2",
+    [campaignId, tenantId]
+  );
+  if (!campaign) return { recipients: [], total: 0 };
+
+  const { status, search, limit = 50, offset = 0 } = options;
+  const conditions = ["cr.campaign_id = $1"];
+  const params: any[] = [campaignId];
+
+  if (status && status !== "all") {
+    params.push(status);
+    conditions.push(`cr.status = $${params.length}`);
+  }
+
+  if (search && search.trim()) {
+    params.push(`%${search.trim().toLowerCase()}%`);
+    conditions.push(`(LOWER(ct.name) LIKE $${params.length} OR LOWER(ct.external_id) LIKE $${params.length})`);
+  }
+
+  // Count total matching
+  const countSql = `
+    SELECT COUNT(cr.id)::int AS count
+    FROM campaign_recipients cr
+    JOIN contacts ct ON ct.id = cr.contact_id
+    WHERE ${conditions.join(" AND ")}
+  `;
+  const countResult = await queryOne<{ count: number }>(countSql, params);
+  const total = countResult?.count || 0;
+
+  // Query paginated rows
+  const queryParams = [...params, limit, offset];
+  const limitParam = `$${queryParams.length - 1}`;
+  const offsetParam = `$${queryParams.length}`;
+
+  const sql = `
+    SELECT
+      cr.id,
+      cr.campaign_id,
+      cr.contact_id,
+      cr.status,
+      cr.current_step,
+      cr.next_send_at,
+      cr.last_error,
+      cr.updated_at,
+      ct.name AS contact_name,
+      ct.external_id AS contact_external_id,
+      (ct.attributes->>'email') AS contact_email,
+      ct.attributes AS contact_attributes,
+      conv.id AS conversation_id
+    FROM campaign_recipients cr
+    JOIN contacts ct ON ct.id = cr.contact_id
+    LEFT JOIN LATERAL (
+      SELECT id FROM conversations
+      WHERE contact_id = cr.contact_id AND tenant_id = '${tenantId}'
+      ORDER BY created_at DESC LIMIT 1
+    ) conv ON true
+    WHERE ${conditions.join(" AND ")}
+    ORDER BY
+      CASE WHEN cr.status = 'failed' THEN 1 WHEN cr.status = 'pending' THEN 2 ELSE 3 END,
+      cr.updated_at DESC
+    LIMIT ${limitParam} OFFSET ${offsetParam}
+  `;
+
+  const recipients = await query<CampaignRecipient>(sql, queryParams);
+  return { recipients, total };
+}
+
+export async function getCampaignAnalytics(tenantId: string, campaignId: string): Promise<any | null> {
+  const campaign = await getCampaign(tenantId, campaignId);
+  if (!campaign) return null;
+
+  // Step breakdown for Drip campaigns
+  const stepStats = await query<{ step: number; count: number }>(
+    `SELECT current_step AS step, COUNT(id)::int AS count
+     FROM campaign_recipients
+     WHERE campaign_id = $1
+     GROUP BY current_step
+     ORDER BY current_step ASC`,
+    [campaignId]
+  );
+
+  // Status breakdown
+  const statusStats = await query<{ status: string; count: number }>(
+    `SELECT status, COUNT(id)::int AS count
+     FROM campaign_recipients
+     WHERE campaign_id = $1
+     GROUP BY status`,
+    [campaignId]
+  );
+
+  const total = campaign.total_recipients || 0;
+  const sent = campaign.sent_count || 0;
+  const completed = campaign.completed_count || 0;
+  const failed = campaign.failed_count || 0;
+  const pending = campaign.pending_count || 0;
+  const deliveredTotal = sent + completed;
+
+  const deliveryRate = total > 0 ? Math.round((deliveredTotal / total) * 100) : 0;
+  const failureRate = total > 0 ? Math.round((failed / total) * 100) : 0;
+  const pendingRate = total > 0 ? Math.round((pending / total) * 100) : 0;
+
+  return {
+    campaign,
+    metrics: {
+      totalRecipients: total,
+      sentCount: sent,
+      completedCount: completed,
+      deliveredTotal,
+      failedCount: failed,
+      pendingCount: pending,
+      deliveryRate,
+      failureRate,
+      pendingRate,
+    },
+    statusBreakdown: statusStats,
+    stepBreakdown: stepStats,
+  };
 }
 
 export async function setCampaignStatus(campaignId: string, status: Campaign["status"]): Promise<void> {

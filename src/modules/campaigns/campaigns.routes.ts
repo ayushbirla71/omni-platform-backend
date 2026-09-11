@@ -1,7 +1,14 @@
 import { Router, Response } from "express";
 import { AuthedRequest, requireAuth, requireRole } from "../../middleware/auth";
 import { asyncHandler } from "../../middleware/async-handler";
-import { createCampaign, listCampaigns, getCampaign, deleteCampaign } from "./campaigns.service";
+import {
+  createCampaign,
+  listCampaigns,
+  getCampaign,
+  deleteCampaign,
+  getCampaignRecipients,
+  getCampaignAnalytics,
+} from "./campaigns.service";
 import { sendBroadcastNow } from "./campaign-sender";
 
 export const campaignsRouter = Router();
@@ -20,6 +27,29 @@ campaignsRouter.get(
     const campaign = await getCampaign(req.auth!.tenantId, req.params.id);
     if (!campaign) return res.sendStatus(404);
     res.json(campaign);
+  })
+);
+
+campaignsRouter.get(
+  "/:id/analytics",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const analytics = await getCampaignAnalytics(req.auth!.tenantId, req.params.id);
+    if (!analytics) return res.sendStatus(404);
+    res.json(analytics);
+  })
+);
+
+campaignsRouter.get(
+  "/:id/recipients",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const { status, search, limit, offset } = req.query;
+    const recipients = await getCampaignRecipients(req.auth!.tenantId, req.params.id, {
+      status: typeof status === "string" ? status : undefined,
+      search: typeof search === "string" ? search : undefined,
+      limit: limit ? parseInt(limit as string, 10) : 50,
+      offset: offset ? parseInt(offset as string, 10) : 0,
+    });
+    res.json(recipients);
   })
 );
 
