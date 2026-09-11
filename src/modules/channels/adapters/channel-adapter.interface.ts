@@ -18,9 +18,10 @@ export interface NormalizedMessage {
 
 export interface OutboundMessage {
   toExternalContactId: string;
-  type: "text" | "image" | "document" | "template" | "product" | "product_list";
+  type: "text" | "image" | "document" | "audio" | "video" | "sticker" | "template" | "product" | "product_list";
   text?: string;
   mediaUrl?: string;
+  filename?: string;
   templateName?: string;
   templateLanguage?: string;
   templateParams?: Record<string, string>;

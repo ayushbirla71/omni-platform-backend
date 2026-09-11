@@ -377,7 +377,57 @@ function buildOutboundBody(message: OutboundMessage) {
       },
     };
   }
-  // image / document
+  // image / document / audio / video / sticker
+  if (message.type === "image") {
+    return {
+      ...base,
+      type: "image",
+      image: {
+        link: message.mediaUrl,
+        caption: message.text || undefined,
+      },
+    };
+  }
+  if (message.type === "video") {
+    return {
+      ...base,
+      type: "video",
+      video: {
+        link: message.mediaUrl,
+        caption: message.text || undefined,
+      },
+    };
+  }
+  if (message.type === "document") {
+    return {
+      ...base,
+      type: "document",
+      document: {
+        link: message.mediaUrl,
+        caption: message.text || undefined,
+        filename: message.filename || undefined,
+      },
+    };
+  }
+  if (message.type === "audio") {
+    return {
+      ...base,
+      type: "audio",
+      audio: {
+        link: message.mediaUrl,
+      },
+    };
+  }
+  if (message.type === "sticker") {
+    return {
+      ...base,
+      type: "sticker",
+      sticker: {
+        link: message.mediaUrl,
+      },
+    };
+  }
+
   return {
     ...base,
     type: message.type,

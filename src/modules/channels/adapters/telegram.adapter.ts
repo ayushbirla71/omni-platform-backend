@@ -60,13 +60,29 @@ export class TelegramAdapter implements ChannelAdapter {
       throw new Error("Telegram adapter does not support template messages");
     }
 
-    const endpoint =
-      message.type === "image" ? "sendPhoto" : message.type === "document" ? "sendDocument" : "sendMessage";
-
+    let endpoint = "sendMessage";
     const body: Record<string, any> = { chat_id: message.toExternalContactId };
-    if (message.type === "text") body.text = message.text ?? "";
-    if (message.type === "image") body.photo = message.mediaUrl;
-    if (message.type === "document") body.document = message.mediaUrl;
+
+    if (message.type === "text") {
+      endpoint = "sendMessage";
+      body.text = message.text ?? "";
+    } else if (message.type === "image") {
+      endpoint = "sendPhoto";
+      body.photo = message.mediaUrl;
+      if (message.text) body.caption = message.text;
+    } else if (message.type === "document") {
+      endpoint = "sendDocument";
+      body.document = message.mediaUrl;
+      if (message.text) body.caption = message.text;
+    } else if (message.type === "video") {
+      endpoint = "sendVideo";
+      body.video = message.mediaUrl;
+      if (message.text) body.caption = message.text;
+    } else if (message.type === "audio") {
+      endpoint = "sendAudio";
+      body.audio = message.mediaUrl;
+      if (message.text) body.caption = message.text;
+    }
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
