@@ -121,11 +121,24 @@ export class WhatsAppAdapter implements ChannelAdapter {
             }
           }
 
+          let errorMessage: string | undefined;
+          if (errorInfo) {
+            const details = errorInfo.error_data?.details;
+            const title = errorInfo.title;
+            const msg = errorInfo.message;
+            if (details && (title || msg)) {
+              const header = title || msg;
+              errorMessage = header && !details.includes(header) ? `${header}: ${details}` : details;
+            } else {
+              errorMessage = details || msg || title || undefined;
+            }
+          }
+
           statusUpdates.push({
             providerMessageId: status.id,
             status: mapStatusValue(status.status),
             errorCode: errorInfo?.code ? String(errorInfo.code) : undefined,
-            errorMessage: errorInfo?.message || errorInfo?.title || errorInfo?.error_data?.details || undefined,
+            errorMessage,
             timestamp: statusTimestamp,
           });
         }

@@ -41,6 +41,10 @@ export interface Message {
   provider_message_id?: string;
   providerMessageId?: string;
   status?: "received" | "sent" | "delivered" | "read" | "failed";
+  errorCode?: string;
+  errorMessage?: string;
+  error_code?: string;
+  error_message?: string;
 }
 
 interface MessageDoc {
@@ -55,6 +59,8 @@ interface MessageDoc {
   providerMessageId?: string;
   latestStatus?: "sent" | "delivered" | "read" | "failed";
   latestStatusAt?: Date;
+  errorCode?: string;
+  errorMessage?: string;
 }
 
 interface MessageStatusEventDoc {
@@ -107,6 +113,10 @@ function toMessage(doc: MessageDoc): Message {
     provider_message_id: doc.providerMessageId,
     providerMessageId: doc.providerMessageId,
     status: doc.latestStatus || (doc.direction === "inbound" ? "received" : "sent"),
+    errorCode: doc.errorCode,
+    errorMessage: doc.errorMessage,
+    error_code: doc.errorCode,
+    error_message: doc.errorMessage,
   };
 }
 
@@ -390,18 +400,33 @@ export async function recordMessageStatusEvent(params: {
 
   // Update latest status on the message doc
   if (messageDoc) {
+    const updateFields: Record<string, any> = {
+      latestStatus: status,
+      latestStatusAt: timestamp,
+    };
+    if (errorCode !== undefined) updateFields.errorCode = errorCode;
+    if (errorMessage !== undefined) updateFields.errorMessage = errorMessage;
+
     await messagesCol.updateOne(
       { id: messageDoc.id },
-      { $set: { latestStatus: status, latestStatusAt: timestamp } }
+      { $set: updateFields }
     );
-    emitRealtimeEvent(tenantId, "message:status", {
-      messageId: messageDoc.id,
-      providerMessageId,
-      status,
-      errorCode,
-      errorMessage,
-      timestamp: timestamp.toISOString(),
-    }, { conversationId: messageDoc.conversationId }).catch(() => {});
+    emitRealtimeEvent(
+      tenantId,
+      "message:status",
+      {
+        id: messageDoc.id,
+        messageId: messageDoc.id,
+        providerMessageId,
+        status,
+        errorCode,
+        errorMessage,
+        error_code: errorCode,
+        error_message: errorMessage,
+        timestamp: timestamp.toISOString(),
+      },
+      { conversationId: messageDoc.conversationId }
+    ).catch(() => {});
     return { conversationId: messageDoc.conversationId };
   }
 
