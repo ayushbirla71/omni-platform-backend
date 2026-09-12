@@ -82,7 +82,7 @@ function toMessage(doc: MessageDoc): Message {
 
   const isoDate = doc.sentAt ? new Date(doc.sentAt).toISOString() : new Date().toISOString();
   const mediaStorageKey = doc.content?.mediaStorageKey;
-  const mediaUrl = doc.content?.mediaUrl || doc.content?.mediaProviderId;
+  const mediaUrl = doc.content?.headerValue || doc.content?.mediaUrl || doc.content?.mediaProviderId;
 
   return {
     _id: doc.id,
