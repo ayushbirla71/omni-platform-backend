@@ -128,7 +128,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
             const msg = errorInfo.message;
             if (details && (title || msg)) {
               const header = title || msg;
-              errorMessage = header && !details.includes(header) ? `${header}: ${details}` : details;
+              errorMessage = header && !details.toLowerCase().includes(header.toLowerCase()) ? `${header}: ${details}` : details;
             } else {
               errorMessage = details || msg || title || undefined;
             }
@@ -200,7 +200,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
             errorMsg = `WhatsApp 24-hour messaging limit tier reached (${metaErr.code}): ${metaErr.message}. Broadcast recipient was capped under your Meta messaging tier.`;
           } else if (metaErr.message) {
             errorMsg = `WhatsApp API error (${metaErr.code || response.status}): ${metaErr.message}`;
-            if (metaErr.error_data?.details) {
+            if (metaErr.error_data?.details && !metaErr.message.toLowerCase().includes(metaErr.error_data.details.toLowerCase())) {
               errorMsg += ` - ${metaErr.error_data.details}`;
             }
           }
