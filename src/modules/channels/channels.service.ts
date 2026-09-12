@@ -24,6 +24,8 @@ export interface Channel {
   bot_first_name?: string | null;
   phone_number_id?: string | null;
   waba_id?: string | null;
+  messaging_limit_tier?: string | null;
+  messagingLimitTier?: string | null;
 }
 
 export interface ChannelSettings {
@@ -44,6 +46,8 @@ export interface ChannelSettings {
     qualityRating?: string | null;
     nameStatus?: string | null;
     codeVerificationStatus?: string | null;
+    messagingLimitTier?: string | null;
+    messaging_limit_tier?: string | null;
     wabaName?: string | null;
     timezoneId?: string | null;
     currency?: string | null;
@@ -133,6 +137,8 @@ export async function listChannels(tenantId: string): Promise<Channel[]> {
       bot_first_name: creds.botFirstName || null,
       phone_number_id: creds.phoneNumberId || null,
       waba_id: creds.wabaId || null,
+      messaging_limit_tier: creds.messagingLimitTier || creds.messaging_limit_tier || null,
+      messagingLimitTier: creds.messagingLimitTier || creds.messaging_limit_tier || null,
     };
   });
 }
@@ -210,6 +216,8 @@ export async function getChannelSettings(
       qualityRating: creds.qualityRating || null,
       nameStatus: creds.nameStatus || null,
       codeVerificationStatus: creds.codeVerificationStatus || null,
+      messagingLimitTier: creds.messagingLimitTier || creds.messaging_limit_tier || null,
+      messaging_limit_tier: creds.messagingLimitTier || creds.messaging_limit_tier || null,
       wabaName: creds.wabaName || null,
       timezoneId: creds.timezoneId || null,
       currency: creds.currency || null,
@@ -247,6 +255,10 @@ export async function syncChannelMetadata(
           if (phoneDetails.quality_rating) creds.qualityRating = phoneDetails.quality_rating;
           if (phoneDetails.name_status) creds.nameStatus = phoneDetails.name_status;
           if (phoneDetails.code_verification_status) creds.codeVerificationStatus = phoneDetails.code_verification_status;
+          if (phoneDetails.messaging_limit_tier) {
+            creds.messagingLimitTier = phoneDetails.messaging_limit_tier;
+            creds.messaging_limit_tier = phoneDetails.messaging_limit_tier;
+          }
           updated = true;
         }
       }

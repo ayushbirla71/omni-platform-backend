@@ -21,6 +21,7 @@ export interface MetaPhoneDetails {
   quality_rating?: string;
   code_verification_status?: string;
   name_status?: string;
+  messaging_limit_tier?: string;
 }
 
 export interface MetaWabaDetails {
@@ -135,7 +136,7 @@ export async function getMetaPhoneNumberDetails(
     const url = new URL(`${GRAPH_API_BASE_URL}/${phoneNumberId}`);
     url.searchParams.set(
       "fields",
-      "id,verified_name,display_phone_number,quality_rating,code_verification_status,name_status"
+      "id,verified_name,display_phone_number,quality_rating,code_verification_status,name_status,messaging_limit_tier"
     );
     const response = await fetch(url.toString(), {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -343,6 +344,8 @@ export async function completeEmbeddedSignup(params: {
     displayPhoneNumber: metaPhone?.display_phone_number,
     businessPhoneNumber: cleanPhone || metaPhone?.display_phone_number,
     qualityRating: metaPhone?.quality_rating,
+    messagingLimitTier: metaPhone?.messaging_limit_tier,
+    messaging_limit_tier: metaPhone?.messaging_limit_tier,
     wabaName: metaWaba?.name,
   };
 

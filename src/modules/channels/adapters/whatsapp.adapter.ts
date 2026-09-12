@@ -183,6 +183,8 @@ export class WhatsAppAdapter implements ChannelAdapter {
         if (metaErr) {
           if (metaErr.code === 131047) {
             errorMsg = "WhatsApp 24-hour customer window expired. You must use an approved template to re-engage with this customer.";
+          } else if (metaErr.code === 131048 || metaErr.code === 131056 || metaErr.code === 80007) {
+            errorMsg = `WhatsApp 24-hour messaging limit tier reached (${metaErr.code}): ${metaErr.message}. Broadcast recipient was capped under your Meta messaging tier.`;
           } else if (metaErr.message) {
             errorMsg = `WhatsApp API error (${metaErr.code || response.status}): ${metaErr.message}`;
             if (metaErr.error_data?.details) {
