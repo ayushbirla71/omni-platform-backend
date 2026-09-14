@@ -44,7 +44,7 @@ export interface MessageStatusUpdate {
 }
 
 export interface ChannelAdapter {
-  readonly type: "whatsapp" | "instagram" | "facebook" | "telegram" | "web";
+  readonly type: "whatsapp" | "instagram" | "facebook" | "telegram" | "web" | "webchat";
 
   /** Verify the webhook actually came from the provider before trusting the body. */
   verifyWebhookSignature(rawBody: string, headers: Record<string, string | string[] | undefined>, credentials: Record<string, any>): boolean;

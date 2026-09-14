@@ -1,10 +1,9 @@
-import { Router } from "express";
+import { Router, Request, Response } from "express";
 import { AuthedRequest, requireAuth } from "../../middleware/auth";
 import { asyncHandler } from "../../middleware/async-handler";
 import { getMediaDownloadUrl, getMediaObject } from "../../db/object-storage";
 
 export const mediaRouter = Router();
-mediaRouter.use(requireAuth);
 
 /**
  * GET /api/media/download-url?key=<tenantId>/<conversationId>/<file>
@@ -13,6 +12,7 @@ mediaRouter.use(requireAuth);
  */
 mediaRouter.get(
   "/download-url",
+  requireAuth,
   asyncHandler(async (req: AuthedRequest, res) => {
     const key = typeof req.query.key === "string" ? req.query.key : undefined;
     if (!key) return res.status(400).json({ error: "key query parameter is required" });
@@ -25,11 +25,14 @@ mediaRouter.get(
  * GET /api/media/file?key=<tenantId>/<conversationId>/<file>
  *
  * Streams media file directly through API backend.
- * Works seamlessly with Bearer token or ?token= query parameter.
+ * Supports public webchat attachments, cross-origin embeds, and authenticated streams.
  */
 mediaRouter.get(
   "/file",
-  asyncHandler(async (req: AuthedRequest, res) => {
+  asyncHandler(async (req: Request, res: Response) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+
     const key = typeof req.query.key === "string" ? req.query.key : undefined;
     if (!key) return res.status(400).json({ error: "key query parameter is required" });
 

@@ -15,6 +15,8 @@ export interface RealtimeSocket extends WebSocket {
   userId?: string;
   subscriptions: Set<string>;
   isPlatformUser?: boolean;
+  isVisitor?: boolean;
+  conversationId?: string;
   role?: string;
   email?: string;
 }
@@ -84,20 +86,32 @@ class WebSocketManager {
 
       try {
         const decoded = jwt.verify(token, JWT_SECRET) as any;
-        const uid = decoded.userId || decoded.id || decoded.platformUserId;
+        const uid = decoded.userId || decoded.id || decoded.platformUserId || decoded.contactId || decoded.visitorSessionId;
         const isPlatform = Boolean(decoded.isPlatformUser || decoded.platformUserId);
+        const isVisitor = Boolean(decoded.isVisitor || decoded.role === "visitor");
 
         if (!isPlatform && (!decoded.tenantId || !uid)) {
           throw new Error("Invalid token claims");
         }
 
         socket.isPlatformUser = isPlatform;
+        socket.isVisitor = isVisitor;
+
         if (isPlatform) {
           socket.userId = decoded.platformUserId || uid;
           socket.tenantId = "platform";
           socket.role = decoded.role || "super_admin";
           socket.email = decoded.email || "";
           socket.subscriptions = new Set(["*"]);
+        } else if (isVisitor) {
+          if (!decoded.tenantId || !decoded.conversationId) {
+            throw new Error("Invalid visitor token claims: tenantId and conversationId required");
+          }
+          socket.userId = uid || "visitor";
+          socket.tenantId = decoded.tenantId;
+          socket.conversationId = decoded.conversationId;
+          socket.role = "visitor";
+          socket.subscriptions = new Set([`conversation:${decoded.conversationId}`]);
         } else {
           socket.user = {
             userId: uid,
@@ -113,8 +127,10 @@ class WebSocketManager {
         logger.info("WebSocket client connected", {
           tenantId: socket.tenantId,
           userId: socket.userId,
-          role: socket.isPlatformUser ? socket.role : socket.user?.role,
+          role: socket.isPlatformUser ? socket.role : (socket.isVisitor ? "visitor" : socket.user?.role),
           isPlatformUser: socket.isPlatformUser,
+          isVisitor: socket.isVisitor,
+          conversationId: socket.conversationId,
         });
 
         // Send connection confirmation
@@ -125,6 +141,8 @@ class WebSocketManager {
               tenantId: socket.tenantId,
               userId: socket.userId,
               isPlatformUser: socket.isPlatformUser,
+              isVisitor: Boolean(socket.isVisitor),
+              conversationId: socket.conversationId,
               timestamp: new Date().toISOString(),
             })
           );
@@ -150,21 +168,58 @@ class WebSocketManager {
         socket.isAlive = true;
       });
 
-      // Handle client incoming messages (subscriptions / pings)
+      // Handle client incoming messages (subscriptions / pings / typing)
       socket.on("message", (raw) => {
         try {
           const msg = JSON.parse(raw.toString());
           if (msg.type === "ping" && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: "pong", timestamp: new Date().toISOString() }));
           } else if (msg.type === "subscribe" && msg.channel) {
-            socket.subscriptions.add(msg.channel);
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({ type: "subscribed", channel: msg.channel }));
+            if (socket.isVisitor) {
+              if (msg.channel === `conversation:${socket.conversationId}`) {
+                socket.subscriptions.add(msg.channel);
+                if (socket.readyState === WebSocket.OPEN) {
+                  socket.send(JSON.stringify({ type: "subscribed", channel: msg.channel }));
+                }
+              }
+            } else {
+              socket.subscriptions.add(msg.channel);
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: "subscribed", channel: msg.channel }));
+              }
             }
           } else if (msg.type === "unsubscribe" && msg.channel) {
-            socket.subscriptions.delete(msg.channel);
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({ type: "unsubscribed", channel: msg.channel }));
+            if (!socket.isVisitor) {
+              socket.subscriptions.delete(msg.channel);
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: "unsubscribed", channel: msg.channel }));
+              }
+            }
+          } else if (msg.type === "typing") {
+            if (socket.isVisitor && socket.conversationId && socket.tenantId) {
+              this.publish(
+                socket.tenantId,
+                "conversation:typing",
+                {
+                  conversationId: socket.conversationId,
+                  isTyping: Boolean(msg.isTyping),
+                  sender: "visitor",
+                  userId: socket.userId,
+                },
+                { conversationId: socket.conversationId }
+              ).catch(() => {});
+            } else if (!socket.isVisitor && msg.conversationId && socket.tenantId) {
+              this.publish(
+                socket.tenantId,
+                "conversation:typing",
+                {
+                  conversationId: msg.conversationId,
+                  isTyping: Boolean(msg.isTyping),
+                  sender: "agent",
+                  userId: socket.userId,
+                },
+                { conversationId: msg.conversationId }
+              ).catch(() => {});
             }
           }
         } catch {
@@ -276,6 +331,22 @@ class WebSocketManager {
           socket.send(rawMessage);
         } catch {
           // Socket error
+        }
+        return;
+      }
+
+      // Guest Visitor socket filtering
+      if (socket.isVisitor) {
+        if (socket.tenantId !== tenantId) return;
+        if (!payload.conversationId || payload.conversationId !== socket.conversationId) return;
+        // Strict Zero-Internal-Note & Tenant Separation: Visitors only receive messages/typing for their conversation
+        if (payload.event.startsWith("support_ticket:") || payload.event.startsWith("platform:") || payload.event.startsWith("system:")) return;
+        if (payload.data?.isInternalNote || payload.data?.message?.isInternalNote) return;
+
+        try {
+          socket.send(rawMessage);
+        } catch (err) {
+          // Socket closed or closing
         }
         return;
       }

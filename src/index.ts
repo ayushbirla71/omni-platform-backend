@@ -44,6 +44,7 @@ import { platformPlansRouter } from "./modules/platform-governance/platform-plan
 import { platformSubscriptionsRouter, platformPaymentsRouter } from "./modules/platform-governance/platform-subscriptions.routes";
 import { platformSupportRouter } from "./modules/platform-governance/platform-support.routes";
 import { supportTicketRouter } from "./modules/support/support-ticket.routes";
+import { webchatRouter, webchatTenantRouter } from "./modules/webchat/webchat.routes";
 import { ensureMediaBucketExists } from "./db/object-storage";
 import { ensureSearchIndices } from "./db/elasticsearch";
 import { realtimeGateway } from "./modules/realtime/websocket.service";
@@ -55,8 +56,21 @@ dotenv.config();
 
 const app = express();
 
-app.use(helmet());
-app.use(cors());
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: false,
+    frameguard: false,
+    contentSecurityPolicy: false,
+  })
+);
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  })
+);
 app.use(requestLogger);
 /**
  * Capturing the raw bytes here (before parsing) is required for correct
@@ -116,6 +130,10 @@ app.use("/api/platform/support", platformSupportRouter);
 
 // Tenant Helpdesk & Support Tickets
 app.use("/api/support/tickets", supportTicketRouter);
+
+// Live Webchat Widget (Public Visitor & Tenant Management)
+app.use("/api/webchat", webchatRouter);
+app.use("/api/channels/webchat", webchatTenantRouter);
 
 app.use("/api/webhooks/subscriptions", outgoingWebhooksRouter);
 app.use("/webhooks/payments", paymentWebhooksRouter);
