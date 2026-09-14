@@ -35,6 +35,15 @@ import { teamRouter } from "./modules/team/team.routes";
 import { billingRouter } from "./modules/billing/billing.routes";
 import { complianceRouter } from "./modules/compliance/compliance.routes";
 import { analyticsRouter } from "./modules/analytics/analytics.routes";
+import { platformAuthRouter } from "./modules/platform-auth/platform-auth.routes";
+import { platformTenantsRouter } from "./modules/platform-governance/platform-tenants.routes";
+import { platformTelemetryRouter } from "./modules/platform-governance/platform-telemetry.routes";
+import { platformTestingRouter } from "./modules/platform-governance/platform-testing.routes";
+import { platformStaffRouter } from "./modules/platform-governance/platform-staff.routes";
+import { platformPlansRouter } from "./modules/platform-governance/platform-plans.routes";
+import { platformSubscriptionsRouter, platformPaymentsRouter } from "./modules/platform-governance/platform-subscriptions.routes";
+import { platformSupportRouter } from "./modules/platform-governance/platform-support.routes";
+import { supportTicketRouter } from "./modules/support/support-ticket.routes";
 import { ensureMediaBucketExists } from "./db/object-storage";
 import { ensureSearchIndices } from "./db/elasticsearch";
 import { realtimeGateway } from "./modules/realtime/websocket.service";
@@ -93,6 +102,21 @@ app.use("/api/team", teamRouter);
 app.use("/api/billing", billingRouter);
 app.use("/api/compliance", complianceRouter);
 app.use("/api/analytics", analyticsRouter);
+
+// Platform Governance & Super Admin Routers (Phase 9)
+app.use("/api/platform/auth", platformAuthRouter);
+app.use("/api/platform/tenants", platformTenantsRouter);
+app.use("/api/platform/telemetry", platformTelemetryRouter);
+app.use("/api/platform/testing", platformTestingRouter);
+app.use("/api/platform/staff", platformStaffRouter);
+app.use("/api/platform/plans", platformPlansRouter);
+app.use("/api/platform/subscriptions", platformSubscriptionsRouter);
+app.use("/api/platform/payments", platformPaymentsRouter);
+app.use("/api/platform/support", platformSupportRouter);
+
+// Tenant Helpdesk & Support Tickets
+app.use("/api/support/tickets", supportTicketRouter);
+
 app.use("/api/webhooks/subscriptions", outgoingWebhooksRouter);
 app.use("/webhooks/payments", paymentWebhooksRouter);
 app.use("/webhooks", webhooksRouter);

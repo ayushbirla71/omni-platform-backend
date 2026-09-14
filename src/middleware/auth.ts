@@ -8,6 +8,7 @@ export interface AuthedRequest extends Request {
     userId: string;
     tenantId: string;
     role: string;
+    email?: string;
     apiKeyId?: string;
     scopes?: string[];
   };
@@ -63,8 +64,8 @@ export async function requireAuth(req: AuthedRequest, res: Response, next: NextF
     }
 
     // Validate that the user and tenant exist in the database.
-    const user = await queryOne<{ id: string; tenant_id: string; role: string; status: string }>(
-      "SELECT id, tenant_id, role, status FROM users WHERE id = $1 AND tenant_id = $2",
+    const user = await queryOne<{ id: string; email?: string; tenant_id: string; role: string; status: string }>(
+      "SELECT id, email, tenant_id, role, status FROM users WHERE id = $1 AND tenant_id = $2",
       [payload.userId, payload.tenantId]
     );
 
@@ -78,6 +79,7 @@ export async function requireAuth(req: AuthedRequest, res: Response, next: NextF
 
     req.auth = {
       userId: user.id,
+      email: user.email,
       tenantId: user.tenant_id,
       role: user.role,
     };

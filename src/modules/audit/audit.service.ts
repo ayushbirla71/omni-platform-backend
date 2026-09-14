@@ -27,23 +27,32 @@ export interface RecordAuditParams {
   ipAddress?: string | null;
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export class AuditService {
   /**
    * Records an audit log event for administrative actions, security, and compliance.
    */
   public static async record(params: RecordAuditParams): Promise<void> {
     try {
+      const isValidUuid = params.userId && UUID_REGEX.test(params.userId);
+      const userId = isValidUuid ? params.userId : null;
+      const details = {
+        ...(params.details || {}),
+        ...(!isValidUuid && params.userId ? { rawActorId: params.userId } : {}),
+      };
+
       await query(
         `INSERT INTO audit_logs (tenant_id, user_id, user_email, action, resource_type, resource_id, details, ip_address)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           params.tenantId,
-          params.userId || null,
+          userId,
           params.userEmail || null,
           params.action,
           params.resourceType,
           params.resourceId || null,
-          JSON.stringify(params.details || {}),
+          JSON.stringify(details),
           params.ipAddress || null,
         ]
       );
