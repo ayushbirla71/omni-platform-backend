@@ -45,6 +45,7 @@ export interface WebchatWidget {
   businessHours: WebchatBusinessHours;
   createdAt: string;
   updatedAt: string;
+  displayName?: string;
   channelDisplayName?: string;
   defaultFlowId?: string | null;
 }
@@ -200,6 +201,7 @@ function mapRowToWidget(row: any): WebchatWidget {
     businessHours: schedule || { enabled: false, timezone: "UTC", schedule: {} },
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
     updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
+    displayName: row.channel_display_name || row.title || "Website Live Chat",
     channelDisplayName: row.channel_display_name,
     defaultFlowId: row.default_flow_id || null,
   };
