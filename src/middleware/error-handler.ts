@@ -38,12 +38,25 @@ export function errorHandler(
     ip: req.ip || req.socket.remoteAddress,
   };
 
-  // Log full stack and contextual details
-  scopedLogger.error(
-    `Unhandled Error processing ${method} ${url}: ${err?.message || err}`,
-    err,
-    errorContext
-  );
+  // Client-specified status code
+  const statusCode = typeof err?.statusCode === "number" ? err.statusCode : typeof err?.status === "number" ? err.status : 500;
+  const errorMessage = statusCode < 500
+    ? err?.message || "Client request error"
+    : (process.env.NODE_ENV === "development" ? (err?.message || "Internal server error") : "Internal server error");
+
+  // Log full stack only for 500+ unhandled server errors; warn for 4xx client errors
+  if (statusCode >= 500) {
+    scopedLogger.error(
+      `Unhandled Error processing ${method} ${url}: ${err?.message || err}`,
+      err,
+      errorContext
+    );
+  } else {
+    scopedLogger.warn(
+      `Client error (${statusCode}) processing ${method} ${url}: ${err?.message || err}`,
+      errorContext
+    );
+  }
 
   if (res.headersSent) {
     return;
@@ -77,16 +90,10 @@ export function errorHandler(
     return;
   }
 
-  // Client-specified status code
-  const statusCode = typeof err?.statusCode === "number" ? err.statusCode : typeof err?.status === "number" ? err.status : 500;
-  const errorMessage = statusCode < 500
-    ? err?.message || "Client request error"
-    : (process.env.NODE_ENV === "development" ? (err?.message || "Internal server error") : "Internal server error");
-
   res.status(statusCode).json({
     error: errorMessage,
-    code: err?.code || "INTERNAL_SERVER_ERROR",
+    code: err?.code || (statusCode === 401 ? "UNAUTHORIZED" : statusCode === 403 ? "FORBIDDEN" : statusCode === 404 ? "NOT_FOUND" : statusCode === 400 ? "BAD_REQUEST" : "INTERNAL_SERVER_ERROR"),
     requestId: reqId,
-    ...(process.env.NODE_ENV === "development" && err?.stack ? { stack: err.stack } : {}),
+    ...(process.env.NODE_ENV === "development" && err?.stack && statusCode >= 500 ? { stack: err.stack } : {}),
   });
 }

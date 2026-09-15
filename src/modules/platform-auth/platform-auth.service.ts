@@ -28,7 +28,17 @@ export interface PlatformUserProfile {
   createdAt: string;
 }
 
-export class PlatformAuthError extends Error {}
+export class PlatformAuthError extends Error {
+  public statusCode: number;
+  public status: number;
+
+  constructor(message: string, statusCode: number = 401) {
+    super(message);
+    this.name = "PlatformAuthError";
+    this.statusCode = statusCode;
+    this.status = statusCode;
+  }
+}
 
 export async function loginPlatformStaff(params: {
   email: string;
@@ -58,16 +68,16 @@ export async function loginPlatformStaff(params: {
   );
 
   if (!staff) {
-    throw new PlatformAuthError("Invalid platform credentials");
+    throw new PlatformAuthError("Invalid platform credentials", 401);
   }
 
   if (staff.status !== "active") {
-    throw new PlatformAuthError(`Platform staff account is ${staff.status}. Access denied.`);
+    throw new PlatformAuthError(`Platform staff account is ${staff.status}. Access denied.`, 403);
   }
 
   const valid = await bcrypt.compare(password, staff.password_hash);
   if (!valid) {
-    throw new PlatformAuthError("Invalid platform credentials");
+    throw new PlatformAuthError("Invalid platform credentials", 401);
   }
 
   // Record login timestamp
@@ -153,18 +163,18 @@ export async function updatePlatformStaffProfile(params: {
     [platformUserId]
   );
 
-  if (!staff) throw new PlatformAuthError("Platform staff member not found");
+  if (!staff) throw new PlatformAuthError("Platform staff member not found", 404);
 
   if (newPassword) {
     if (!currentPassword) {
-      throw new PlatformAuthError("Current password is required to change platform password");
+      throw new PlatformAuthError("Current password is required to change platform password", 400);
     }
     const valid = await bcrypt.compare(currentPassword, staff.password_hash);
     if (!valid) {
-      throw new PlatformAuthError("Current password is incorrect");
+      throw new PlatformAuthError("Current password is incorrect", 400);
     }
     if (newPassword.length < 10) {
-      throw new PlatformAuthError("Platform passwords must be at least 10 characters long");
+      throw new PlatformAuthError("Platform passwords must be at least 10 characters long", 400);
     }
     const newHash = await bcrypt.hash(newPassword, 12);
     await queryOne(
@@ -181,14 +191,19 @@ export async function updatePlatformStaffProfile(params: {
   }
 
   const updated = await getPlatformStaffProfile(platformUserId);
-  if (!updated) throw new PlatformAuthError("Failed to load updated platform profile");
+  if (!updated) throw new PlatformAuthError("Failed to load updated platform profile", 500);
   return updated;
 }
 
 export function verifyPlatformToken(token: string): PlatformTokenPayload {
-  const decoded = jwt.verify(token, JWT_SECRET) as any;
-  if (!decoded?.isPlatformUser || !decoded?.platformUserId || !decoded?.role) {
-    throw new PlatformAuthError("Invalid platform token claims");
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    if (!decoded?.isPlatformUser || !decoded?.platformUserId || !decoded?.role) {
+      throw new PlatformAuthError("Invalid platform token claims", 401);
+    }
+    return decoded as PlatformTokenPayload;
+  } catch (err: any) {
+    if (err instanceof PlatformAuthError) throw err;
+    throw new PlatformAuthError("Invalid or expired platform token", 401);
   }
-  return decoded as PlatformTokenPayload;
 }
