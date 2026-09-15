@@ -2,7 +2,7 @@ import { Router } from "express";
 import { AuthedRequest, requireAuth, requireRole } from "../../middleware/auth";
 import { asyncHandler } from "../../middleware/async-handler";
 import { getChannelWithCredentials } from "../channels/channels.service";
-import { listTemplates, createTemplate } from "./templates.service";
+import { listTemplates, createTemplate, deleteTemplate } from "./templates.service";
 import { Logger } from "../../utils/logger";
 
 const log = new Logger("templates");
@@ -81,8 +81,38 @@ templatesRouter.post(
         components,
       });
       res.status(201).json(result);
-    } catch (err) {
+    } catch (err: any) {
+      log.error(`Failed to create template for WABA ${creds.wabaId}:`, err);
       res.status(400).json({ error: err instanceof Error ? err.message : "Failed to create template" });
+    }
+  })
+);
+
+templatesRouter.delete(
+  "/:channelId/templates/:templateName",
+  requireRole("owner", "admin"),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const creds = await loadWhatsAppChannelOrRespond(req, res);
+    if (!creds) return;
+
+    const { templateName } = req.params;
+    const { templateId } = req.query as { templateId?: string };
+    if (!templateName && !templateId) {
+      return res.status(400).json({ error: "templateName or templateId is required" });
+    }
+
+    try {
+      const result = await deleteTemplate(
+        creds.wabaId,
+        creds.accessToken,
+        creds.apiBaseUrl,
+        templateName,
+        templateId
+      );
+      res.json(result);
+    } catch (err: any) {
+      log.error(`Failed to delete template "${templateName || templateId}" for WABA ${creds.wabaId}:`, err);
+      res.status(400).json({ error: err instanceof Error ? err.message : "Failed to delete template" });
     }
   })
 );
