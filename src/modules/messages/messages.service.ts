@@ -246,6 +246,10 @@ export async function sendOutboundMessage(params: {
   if (type === "template") {
     // Send WhatsApp template message
     if (!templateName) throw new Error("templateName is required for template messages");
+    let resolvedHeaderValue = headerValue;
+    if (!resolvedHeaderValue && mediaStorageKey) {
+      resolvedHeaderValue = await getMediaDownloadUrl(mediaStorageKey);
+    }
     const result = await adapter.send(
       {
         toExternalContactId: conversation.contact_external_id,
@@ -254,7 +258,8 @@ export async function sendOutboundMessage(params: {
         templateLanguage,
         templateParams,
         headerType,
-        headerValue,
+        headerValue: resolvedHeaderValue,
+        filename,
       },
       channel.credentials || {}
     );
@@ -289,7 +294,15 @@ export async function sendOutboundMessage(params: {
 
   let content: Record<string, any>;
   if (type === "template") {
-    content = { templateName, templateLanguage, templateParams, headerType, headerValue };
+    content = {
+      templateName,
+      templateLanguage,
+      templateParams,
+      headerType,
+      headerValue: headerValue || (mediaStorageKey ? `/api/media/file?key=${encodeURIComponent(mediaStorageKey)}` : undefined),
+      mediaStorageKey,
+      filename,
+    };
   } else if (type === "text") {
     content = { text };
   } else {

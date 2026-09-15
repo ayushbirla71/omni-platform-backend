@@ -338,12 +338,17 @@ function buildOutboundBody(message: OutboundMessage) {
           parameters: [{ type: "text", text: message.headerValue }],
         });
       } else if (["IMAGE", "VIDEO", "DOCUMENT"].includes(message.headerType)) {
+        const paramType = message.headerType.toLowerCase();
+        const mediaObj: Record<string, any> = { link: message.headerValue };
+        if (message.headerType === "DOCUMENT" && message.filename) {
+          mediaObj.filename = message.filename;
+        }
         components.push({
           type: "header",
           parameters: [
             {
-              type: message.headerType.toLowerCase(),
-              [message.headerType.toLowerCase()]: { link: message.headerValue },
+              type: paramType,
+              [paramType]: mediaObj,
             },
           ],
         });

@@ -15,6 +15,7 @@ import { BroadcastDefinition, DripDefinition, FlowCampaignDefinition, interpolat
 import { findOrCreateOpenConversation } from "../conversations/conversations.service";
 import { runFlowForConversation } from "../flows/flow-engine-runner";
 import { getFlow } from "../flows/flows.service";
+import { getMediaDownloadUrl } from "../../db/object-storage";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -72,8 +73,45 @@ export async function sendBroadcastNow(
 
         await markBroadcastSent(recipient.id);
         sent++;
+      } else if (definition.templateName) {
+        // 2. WhatsApp Template broadcast with optional media header
+        const adapter = getAdapter(channel.type);
+        let resolvedHeaderValue = definition.headerValue;
+        if (!resolvedHeaderValue && definition.mediaStorageKey) {
+          try {
+            resolvedHeaderValue = await getMediaDownloadUrl(definition.mediaStorageKey, 7 * 86400);
+          } catch (storageErr) {
+            console.warn(`[campaign-sender] Failed generating presigned URL for key ${definition.mediaStorageKey}:`, storageErr);
+            resolvedHeaderValue = `/api/media/file?key=${encodeURIComponent(definition.mediaStorageKey)}`;
+          }
+        } else if (resolvedHeaderValue) {
+          resolvedHeaderValue = interpolate(resolvedHeaderValue, { name: recipient.name });
+        }
+
+        const interpolatedParams: Record<string, string> = {};
+        if (definition.templateParams) {
+          for (const [key, val] of Object.entries(definition.templateParams)) {
+            interpolatedParams[key] = interpolate(val, { name: recipient.name });
+          }
+        }
+
+        await adapter.send(
+          {
+            toExternalContactId: recipient.external_id,
+            type: "template",
+            templateName: definition.templateName,
+            templateLanguage: definition.templateLanguage || "en",
+            templateParams: interpolatedParams,
+            headerType: definition.headerType,
+            headerValue: resolvedHeaderValue,
+            filename: definition.filename,
+          },
+          channel.credentials || {}
+        );
+        await markBroadcastSent(recipient.id);
+        sent++;
       } else {
-        // 2. Standard text broadcast message
+        // 3. Standard text broadcast message
         const adapter = getAdapter(channel.type);
         const text = interpolate(definition.text || "", { name: recipient.name });
         await adapter.send(

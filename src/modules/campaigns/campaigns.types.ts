@@ -2,6 +2,13 @@ export interface BroadcastDefinition {
   text?: string; // supports {{name}} interpolation against the contact's name
   flowId?: string; // If set, this broadcast runs a Visual Flow for each recipient
   tags?: string[]; // Tag filter used to generate recipient list
+  templateName?: string;
+  templateLanguage?: string;
+  templateParams?: Record<string, string>;
+  headerType?: "TEXT" | "IMAGE" | "DOCUMENT" | "VIDEO";
+  headerValue?: string;
+  mediaStorageKey?: string;
+  filename?: string;
 }
 
 export interface FlowCampaignDefinition {

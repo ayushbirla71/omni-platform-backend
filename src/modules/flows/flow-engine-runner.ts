@@ -69,6 +69,8 @@ export async function runFlowForConversation(params: {
           templateParams: msg.templateParams,
           headerType: msg.headerType,
           headerValue: msg.headerValue,
+          mediaStorageKey: msg.mediaStorageKey,
+          filename: msg.filename,
         });
         lastProviderMessageId = sent.provider_message_id;
       }
@@ -149,6 +151,10 @@ export async function handleDeliveryStatusCallback(params: {
           templateName: msg.templateName,
           templateLanguage: msg.templateLanguage,
           templateParams: msg.templateParams,
+          headerType: msg.headerType,
+          headerValue: msg.headerValue,
+          mediaStorageKey: msg.mediaStorageKey,
+          filename: msg.filename,
         });
       }
     }

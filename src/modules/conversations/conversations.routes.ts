@@ -162,7 +162,7 @@ conversationsRouter.post(
 conversationsRouter.post(
   "/:id/template",
   asyncHandler(async (req: AuthedRequest, res) => {
-    const { templateName, templateLanguage, templateParams, headerType, headerValue } = req.body || {};
+    const { templateName, templateLanguage, templateParams, headerType, headerValue, mediaStorageKey, filename } = req.body || {};
     if (!templateName) {
       return res.status(400).json({ error: "templateName is required" });
     }
@@ -178,6 +178,8 @@ conversationsRouter.post(
         templateParams: templateParams || {},
         headerType,
         headerValue,
+        mediaStorageKey,
+        filename,
       });
       res.status(201).json(message);
     } catch (err: any) {

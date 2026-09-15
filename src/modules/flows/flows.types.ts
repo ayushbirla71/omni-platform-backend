@@ -87,6 +87,8 @@ export type TemplateNode = {
   templateParams?: Record<string, string>; // e.g. { "1": "{{userName}}", "2": "Order #123" }
   headerType?: "TEXT" | "IMAGE" | "DOCUMENT" | "VIDEO";
   headerValue?: string; // static URL or {{variable}} or text
+  mediaStorageKey?: string; // S3/MinIO key for uploaded template media asset
+  filename?: string;
   buttons?: TemplateButtonAction[];
   waitForDelivery?: boolean;
   onDelivered?: string;

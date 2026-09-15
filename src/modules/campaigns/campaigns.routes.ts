@@ -87,8 +87,16 @@ campaignsRouter.post(
       return res.status(400).json({ error: "flow campaign requires a valid flowId in definition" });
     }
 
-    if (type === "broadcast" && !definition?.text && !definition?.flowId && !req.body.flowId && !req.body.message) {
-      return res.status(400).json({ error: "broadcast definition requires a text or flowId field" });
+    if (
+      type === "broadcast" &&
+      !definition?.text &&
+      !definition?.flowId &&
+      !definition?.templateName &&
+      !req.body.flowId &&
+      !req.body.message &&
+      !req.body.templateName
+    ) {
+      return res.status(400).json({ error: "broadcast definition requires a text, templateName, or flowId field" });
     }
 
     if (type === "drip" && (!Array.isArray(definition?.steps) || definition.steps.length === 0)) {
@@ -99,6 +107,7 @@ campaignsRouter.post(
       ...definition,
       ...(type === "flow" && req.body.flowId ? { flowId: req.body.flowId } : {}),
       ...(type === "broadcast" && req.body.message ? { text: req.body.message } : {}),
+      ...(type === "broadcast" && req.body.templateName ? { templateName: req.body.templateName } : {}),
       ...(tags ? { tags } : {}),
     };
 

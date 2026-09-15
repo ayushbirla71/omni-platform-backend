@@ -10,6 +10,8 @@ export interface OutboundFlowMessage {
   templateParams?: Record<string, string>;
   headerType?: "TEXT" | "IMAGE" | "DOCUMENT" | "VIDEO";
   headerValue?: string;
+  mediaStorageKey?: string;
+  filename?: string;
   nodeId?: string;
   waitForDelivery?: boolean;
 }
@@ -207,6 +209,8 @@ export async function advanceFlow(
           templateParams: interpolatedParams,
           headerType: node.headerType,
           headerValue: interpolatedHeaderValue,
+          mediaStorageKey: node.mediaStorageKey,
+          filename: node.filename,
           nodeId: node.id,
           waitForDelivery: shouldWaitForDelivery,
         });
