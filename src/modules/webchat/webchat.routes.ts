@@ -73,8 +73,9 @@ export const webchatRouter = Router();
 webchatRouter.use((_req: Request, res: Response, next: NextFunction) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, x-parent-origin");
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  res.setHeader("Content-Security-Policy", "frame-ancestors *");
   res.removeHeader("X-Frame-Options");
   if (_req.method === "OPTIONS") return res.sendStatus(204);
   next();
