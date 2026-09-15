@@ -99,6 +99,24 @@ export function isBusinessOnline(businessHours?: WebchatBusinessHours): boolean 
 }
 
 /**
+ * Helper to extract a normalized, lowercase hostname without protocol, port, paths, trailing slashes, or wildcards.
+ */
+export function extractCleanHostname(input: string): string {
+  if (!input || typeof input !== "string") return "";
+  let str = input.trim().toLowerCase();
+  str = str.replace(/^\*\./, "");
+  if (str.startsWith("http://") || str.startsWith("https://")) {
+    try {
+      return new URL(str).hostname.toLowerCase();
+    } catch {}
+  }
+  str = str.replace(/^https?:\/\//, "");
+  str = str.split("/")[0].split("?")[0].split("#")[0];
+  str = str.split(":")[0].trim();
+  return str;
+}
+
+/**
  * Safely validate whether an incoming HTTP Origin or Referer header is allowed by the widget's allowedOrigins list.
  * Permissive rules:
  * 1. If allowedOrigins is not defined, empty ([]), or contains wildcard "*", allow all origins.
@@ -111,19 +129,11 @@ export function isOriginAllowed(allowedOrigins?: string[] | null, originHeader?:
     return true;
   }
 
-  if (!originHeader || typeof originHeader !== "string") {
+  if (!originHeader || typeof originHeader !== "string" || originHeader.trim() === "") {
     return true;
   }
 
-  let originHostname = "";
-  try {
-    const raw = originHeader.trim();
-    const url = raw.startsWith("http://") || raw.startsWith("https://") ? new URL(raw) : new URL(`http://${raw}`);
-    originHostname = url.hostname.toLowerCase();
-  } catch {
-    originHostname = originHeader.trim().toLowerCase().split(":")[0];
-  }
-
+  const originHostname = extractCleanHostname(originHeader);
   if (!originHostname) return true;
 
   // Local development / testing origins are always permitted
@@ -140,22 +150,13 @@ export function isOriginAllowed(allowedOrigins?: string[] | null, originHeader?:
 
   return allowedOrigins.some((allowed) => {
     if (!allowed || typeof allowed !== "string") return false;
-    const trimmed = allowed.trim().toLowerCase();
+    const trimmed = allowed.trim();
     if (trimmed === "*" || trimmed === "") return true;
 
-    try {
-      let allowedHost = "";
-      if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-        allowedHost = new URL(trimmed).hostname.toLowerCase();
-      } else {
-        allowedHost = trimmed.split(":")[0].replace(/^\*\./, "").trim();
-      }
+    const allowedHostname = extractCleanHostname(trimmed);
+    if (!allowedHostname) return false;
 
-      if (!allowedHost) return false;
-      return originHostname === allowedHost || originHostname.endsWith(`.${allowedHost}`);
-    } catch {
-      return false;
-    }
+    return originHostname === allowedHostname || originHostname.endsWith(`.${allowedHostname}`);
   });
 }
 
@@ -522,6 +523,7 @@ export async function initVisitorSession(params: {
   contactName?: string;
   contactEmail?: string;
   metadata?: Record<string, any>;
+  originHeader?: string;
 }): Promise<{
   token: string;
   visitorSessionId: string;
@@ -533,7 +535,7 @@ export async function initVisitorSession(params: {
   offlineMessage: string;
   messages: Message[];
 }> {
-  const { widgetKey, contactName, contactEmail, metadata = {} } = params;
+  const { widgetKey, contactName, contactEmail, metadata = {}, originHeader } = params;
 
   const row = await queryOne<any>(
     `SELECT w.*, c.tenant_id, c.id as channel_id, c.status as channel_status
@@ -552,6 +554,12 @@ export async function initVisitorSession(params: {
   }
 
   const widget = mapRowToWidget(row);
+
+  // Check allowed origins if specified
+  if (!isOriginAllowed(widget.allowedOrigins, originHeader)) {
+    throw Object.assign(new Error("Origin not allowed for this webchat widget"), { statusCode: 403 });
+  }
+
   const tenantId = row.tenant_id;
   const channelId = row.channel_id;
 

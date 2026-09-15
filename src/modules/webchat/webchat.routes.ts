@@ -92,7 +92,11 @@ webchatRouter.get(
   "/config/:widgetKey",
   asyncHandler(async (req: Request, res: Response) => {
     const { widgetKey } = req.params;
-    const origin = req.headers.origin || req.headers.referer;
+    const origin =
+      (req.query.parentOrigin as string) ||
+      (req.headers["x-parent-origin"] as string) ||
+      req.headers.origin ||
+      req.headers.referer;
     const config = await getPublicWidgetConfig(widgetKey, typeof origin === "string" ? origin : undefined);
     res.json(config);
   })
@@ -105,10 +109,17 @@ webchatRouter.get(
 webchatRouter.post(
   "/init",
   asyncHandler(async (req: Request, res: Response) => {
-    const { widgetKey, visitorSessionId, contactName, contactEmail, metadata } = req.body;
+    const { widgetKey, visitorSessionId, contactName, contactEmail, metadata, parentOrigin } = req.body;
     if (!widgetKey) {
       return res.status(400).json({ error: "widgetKey is required" });
     }
+
+    const origin =
+      (req.query.parentOrigin as string) ||
+      parentOrigin ||
+      (req.headers["x-parent-origin"] as string) ||
+      req.headers.origin ||
+      req.headers.referer;
 
     const session = await initVisitorSession({
       widgetKey,
@@ -116,6 +127,7 @@ webchatRouter.post(
       contactName,
       contactEmail,
       metadata,
+      originHeader: typeof origin === "string" ? origin : undefined,
     });
 
     res.json(session);
@@ -283,9 +295,12 @@ webchatRouter.get("/embed.js", (req: Request, res: Response) => {
   var baseHost = (window.OmniChatConfig && window.OmniChatConfig.appUrl) || scriptOrigin || '${baseUrl}';
   baseHost = baseHost.replace(/\\/+$/, '');
 
+  var parentOrigin = window.location.origin || (window.location.protocol + '//' + window.location.host);
+
   var iframe = document.createElement('iframe');
   iframe.id = 'omni-webchat-iframe';
-  iframe.src = baseHost + '/chat/' + encodeURIComponent(widgetKey) + '?embedded=true';
+  iframe.src = baseHost + '/chat/' + encodeURIComponent(widgetKey) + '?embedded=true&parentOrigin=' + encodeURIComponent(parentOrigin);
+  iframe.setAttribute('allowtransparency', 'true');
   iframe.style.position = 'fixed';
   iframe.style.bottom = '20px';
   iframe.style.right = '20px';
@@ -295,6 +310,7 @@ webchatRouter.get("/embed.js", (req: Request, res: Response) => {
   iframe.style.maxWidth = 'calc(100vw - 30px)';
   iframe.style.border = 'none';
   iframe.style.background = 'transparent';
+  iframe.style.backgroundColor = 'transparent';
   iframe.style.zIndex = '999999';
   iframe.style.overflow = 'hidden';
   iframe.style.transition = 'width 0.28s cubic-bezier(0.16, 1, 0.3, 1), height 0.28s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.28s ease';
