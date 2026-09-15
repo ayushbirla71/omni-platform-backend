@@ -2,7 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import { AuthedRequest, requireAuth } from "../../middleware/auth";
 import { asyncHandler } from "../../middleware/async-handler";
-import { listConversations, getConversation, assignAgent, updateConversationStatus } from "./conversations.service";
+import { listConversations, getConversation, assignAgent, updateConversationStatus, resumeBotForConversation } from "./conversations.service";
 import { listMessages, sendOutboundMessage } from "../messages/messages.service";
 import { uploadMedia } from "../../db/object-storage";
 
@@ -211,5 +211,13 @@ conversationsRouter.patch(
     }
     await updateConversationStatus(req.auth!.tenantId, req.params.id, status);
     res.status(204).send();
+  })
+);
+
+conversationsRouter.post(
+  "/:id/resume-bot",
+  asyncHandler(async (req: AuthedRequest, res) => {
+    await resumeBotForConversation(req.auth!.tenantId, req.params.id);
+    res.json({ success: true, message: "AI flow and autonomous reply mode resumed for conversation" });
   })
 );

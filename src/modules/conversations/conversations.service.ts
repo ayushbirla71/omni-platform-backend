@@ -305,6 +305,15 @@ export async function updateConversationStatus(
        WHERE id = $2 AND tenant_id = $3`,
       [status, conversationId, tenantId]
     );
+
+    // Release any handed_off or active flow runs on resolution so future inbound starts fresh
+    try {
+      await query(
+        `UPDATE flow_runs SET status = 'completed', updated_at = now()
+         WHERE conversation_id = $1 AND (status = 'handed_off' OR status = 'running')`,
+        [conversationId]
+      );
+    } catch {}
   } else {
     await query(
       "UPDATE conversations SET status = $1 WHERE id = $2 AND tenant_id = $3",
@@ -316,6 +325,24 @@ export async function updateConversationStatus(
     tenantId,
     "conversation:status",
     { conversationId, status },
+    { conversationId }
+  ).catch(() => {});
+}
+
+export async function resumeBotForConversation(
+  tenantId: string,
+  conversationId: string
+): Promise<void> {
+  await query(
+    `UPDATE flow_runs SET status = 'completed', updated_at = now()
+     WHERE conversation_id = $1 AND (status = 'handed_off' OR status = 'running')`,
+    [conversationId]
+  );
+
+  emitRealtimeEvent(
+    tenantId,
+    "conversation:bot_resumed",
+    { conversationId },
     { conversationId }
   ).catch(() => {});
 }

@@ -251,8 +251,12 @@ export async function advanceFlow(
       }
 
       case "condition": {
-        const value = variables[node.variable];
-        const branch = node.branches?.find((b) => b.equals === String(value));
+        const rawValue = variables[node.variable];
+        const strVal = rawValue !== undefined && rawValue !== null ? String(rawValue).trim().toLowerCase() : "";
+        const branch = node.branches?.find((b) => {
+          const bVal = String(b.equals).trim().toLowerCase();
+          return bVal === strVal || b.equals === String(rawValue);
+        });
         nodeId = branch?.next ?? node.default ?? null;
         continue;
       }
