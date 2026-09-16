@@ -1,8 +1,23 @@
+export interface TemplateButton {
+  type: "QUICK_REPLY" | "URL" | "PHONE_NUMBER" | "COPY_CODE" | string;
+  text?: string;
+  url?: string;
+  phone_number?: string;
+  phoneNumber?: string;
+  code?: string;
+  example?: string | string[];
+}
+
 export interface TemplateComponent {
   type: "HEADER" | "BODY" | "FOOTER" | "BUTTONS";
-  text?: string;
   format?: "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT";
-  buttons?: { type: string; text: string; url?: string; phone_number?: string }[];
+  text?: string;
+  buttons?: TemplateButton[];
+  example?: {
+    header_text?: string[];
+    header_handle?: string[];
+    body_text?: string[][];
+  };
 }
 
 export interface CreateTemplateInput {
@@ -63,10 +78,67 @@ export async function createTemplate(
 ): Promise<{ id: string; status: string; category: string }> {
   const url = `${apiBaseUrl}/${wabaId}/message_templates`;
   console.log(`[Templates] Submitting message template "${template.name}" to Meta WABA: ${wabaId}...`);
+
+  // Normalize components for Meta Cloud API
+  const formattedComponents = (template.components || []).map((comp) => {
+    const formatted: any = { type: comp.type };
+
+    if (comp.type === "HEADER") {
+      formatted.format = comp.format || "TEXT";
+      if (formatted.format === "TEXT" && comp.text) {
+        formatted.text = comp.text;
+      }
+      if (comp.example) {
+        formatted.example = {};
+        if (comp.example.header_text?.length) formatted.example.header_text = comp.example.header_text;
+        if (comp.example.header_handle?.length) formatted.example.header_handle = comp.example.header_handle;
+      }
+    } else if (comp.type === "BODY") {
+      formatted.text = comp.text;
+      if (comp.example?.body_text?.length) {
+        formatted.example = { body_text: comp.example.body_text };
+      }
+    } else if (comp.type === "FOOTER") {
+      formatted.text = comp.text;
+    } else if (comp.type === "BUTTONS" && Array.isArray(comp.buttons)) {
+      formatted.buttons = comp.buttons.map((btn) => {
+        const b: any = { type: btn.type };
+        if (btn.type === "QUICK_REPLY") {
+          b.text = btn.text;
+        } else if (btn.type === "URL") {
+          b.text = btn.text;
+          b.url = btn.url;
+          if (btn.example) {
+            b.example = Array.isArray(btn.example) ? btn.example : [btn.example];
+          }
+        } else if (btn.type === "PHONE_NUMBER") {
+          b.text = btn.text;
+          b.phone_number = btn.phone_number || btn.phoneNumber;
+        } else if (btn.type === "COPY_CODE") {
+          b.example = btn.code || btn.example;
+        } else {
+          if (btn.text) b.text = btn.text;
+          if (btn.url) b.url = btn.url;
+          if (btn.phone_number || btn.phoneNumber) b.phone_number = btn.phone_number || btn.phoneNumber;
+        }
+        return b;
+      });
+    }
+
+    return formatted;
+  });
+
+  const payload = {
+    name: template.name,
+    language: template.language,
+    category: template.category,
+    components: formattedComponents,
+  };
+
   const response = await fetch(url, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify(template),
+    body: JSON.stringify(payload),
   });
   if (!response.ok) {
     const errText = await response.text();
