@@ -299,9 +299,9 @@ export async function setCampaignStatus(campaignId: string, status: Campaign["st
 export async function getRecipientsByStatus(
   campaignId: string,
   status: CampaignRecipient["status"]
-): Promise<(CampaignRecipient & { external_id: string; name: string | null })[]> {
+): Promise<(CampaignRecipient & { external_id: string; name: string | null; attributes?: any })[]> {
   return query(
-    `SELECT cr.*, c.external_id, c.name
+    `SELECT cr.*, c.external_id, c.name, c.attributes
      FROM campaign_recipients cr
      JOIN contacts c ON c.id = cr.contact_id
      WHERE cr.campaign_id = $1 AND cr.status = $2`,
@@ -311,10 +311,10 @@ export async function getRecipientsByStatus(
 
 /** Every recipient row (across all campaigns) whose next scheduled send is due now. */
 export async function getDueDripRecipients(): Promise<
-  (CampaignRecipient & { external_id: string; name: string | null; campaign_id: string })[]
+  (CampaignRecipient & { external_id: string; name: string | null; attributes?: any; campaign_id: string })[]
 > {
   return query(
-    `SELECT cr.*, c.external_id, c.name
+    `SELECT cr.*, c.external_id, c.name, c.attributes
      FROM campaign_recipients cr
      JOIN contacts c ON c.id = cr.contact_id
      JOIN campaigns camp ON camp.id = cr.campaign_id

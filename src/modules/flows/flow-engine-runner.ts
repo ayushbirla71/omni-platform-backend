@@ -1,3 +1,4 @@
+import { queryOne } from "../../db/pool";
 import { withLock } from "../../db/redis";
 import { sendOutboundMessage } from "../messages/messages.service";
 import {
@@ -44,9 +45,39 @@ export async function runFlowForConversation(params: {
       return;
     }
 
+    // Hydrate contact details & custom attributes from PostgreSQL
+    const contactRow = await queryOne<any>(
+      `SELECT c.id, c.name, c.external_id, c.attributes
+       FROM contacts c
+       JOIN conversations conv ON conv.contact_id = c.id
+       WHERE conv.id = $1`,
+      [conversationId]
+    );
+
+    const contactAttributes = contactRow?.attributes || {};
+    const contactScope = {
+      id: contactRow?.id || "",
+      name: contactRow?.name || "",
+      external_id: contactRow?.external_id || "",
+      phone: contactRow?.external_id || "",
+      email: contactAttributes.email || "",
+      tags: contactAttributes.tags || [],
+      attributes: contactAttributes,
+      ...contactAttributes,
+    };
+
+    const mergedVariables = {
+      name: contactRow?.name || "",
+      phone: contactRow?.external_id || "",
+      email: contactAttributes.email || "",
+      ...contactAttributes,
+      contact: contactScope,
+      ...(flowRun.variables || {}),
+    };
+
     const advance = await advanceFlow(
       flow.definition,
-      { currentNodeId: flowRun.current_node_id, variables: flowRun.variables },
+      { currentNodeId: flowRun.current_node_id, variables: mergedVariables },
       incomingText,
       resumeAtNodeId,
       { tenantId, conversationId }

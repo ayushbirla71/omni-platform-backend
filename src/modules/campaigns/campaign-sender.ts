@@ -57,6 +57,22 @@ export async function sendBroadcastNow(
 
   for (const recipient of recipients) {
     try {
+      const recipientVars = {
+        name: recipient.name || "",
+        phone: recipient.external_id || "",
+        email: recipient.attributes?.email || "",
+        ...(recipient.attributes || {}),
+        contact: {
+          name: recipient.name || "",
+          external_id: recipient.external_id || "",
+          phone: recipient.external_id || "",
+          email: recipient.attributes?.email || "",
+          tags: recipient.attributes?.tags || [],
+          attributes: recipient.attributes || {},
+          ...(recipient.attributes || {}),
+        },
+      };
+
       if (flowId) {
         // 1. Flow-driven campaign: instantiate or reopen conversation, then run flow engine
         const conversation = await findOrCreateOpenConversation({
@@ -85,13 +101,13 @@ export async function sendBroadcastNow(
             resolvedHeaderValue = `/api/media/file?key=${encodeURIComponent(definition.mediaStorageKey)}`;
           }
         } else if (resolvedHeaderValue) {
-          resolvedHeaderValue = interpolate(resolvedHeaderValue, { name: recipient.name });
+          resolvedHeaderValue = interpolate(resolvedHeaderValue, recipientVars);
         }
 
         const interpolatedParams: Record<string, string> = {};
         if (definition.templateParams) {
           for (const [key, val] of Object.entries(definition.templateParams)) {
-            interpolatedParams[key] = interpolate(val, { name: recipient.name });
+            interpolatedParams[key] = interpolate(val, recipientVars);
           }
         }
 
@@ -113,7 +129,7 @@ export async function sendBroadcastNow(
       } else {
         // 3. Standard text broadcast message
         const adapter = getAdapter(channel.type);
-        const text = interpolate(definition.text || "", { name: recipient.name });
+        const text = interpolate(definition.text || "", recipientVars);
         await adapter.send(
           { toExternalContactId: recipient.external_id, type: "text", text },
           channel.credentials || {}
@@ -166,7 +182,22 @@ export async function processDueDripSteps(): Promise<{ processed: number; failed
       }
 
       const adapter = getAdapter(channel.type);
-      const text = interpolate(step.text, { name: recipient.name });
+      const recipientVars = {
+        name: recipient.name || "",
+        phone: recipient.external_id || "",
+        email: recipient.attributes?.email || "",
+        ...(recipient.attributes || {}),
+        contact: {
+          name: recipient.name || "",
+          external_id: recipient.external_id || "",
+          phone: recipient.external_id || "",
+          email: recipient.attributes?.email || "",
+          tags: recipient.attributes?.tags || [],
+          attributes: recipient.attributes || {},
+          ...(recipient.attributes || {}),
+        },
+      };
+      const text = interpolate(step.text, recipientVars);
       await adapter.send(
         { toExternalContactId: recipient.external_id, type: "text", text },
         channel.credentials || {}

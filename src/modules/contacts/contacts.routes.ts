@@ -5,12 +5,16 @@ import { asyncHandler } from "../../middleware/async-handler";
 import {
   listContacts,
   listTenantTags,
+  listTenantAttributeKeys,
   countContactsByFilter,
   createContact,
   updateContact,
   deleteContact,
+  deleteContactsBulk,
   importContactsFromRows,
   parseContactsFile,
+  getSpreadsheetPreview,
+  ColumnMapping,
   normalizeTags,
 } from "./contacts.service";
 import { listChannels } from "../channels/channels.service";
@@ -50,6 +54,15 @@ contactsRouter.get(
   asyncHandler(async (req: AuthedRequest, res: Response) => {
     const tags = await listTenantTags(req.auth!.tenantId);
     res.json(tags);
+  })
+);
+
+/** List all distinct custom attribute keys (company, product, price, etc.) for the current tenant */
+contactsRouter.get(
+  "/attribute-keys",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const keys = await listTenantAttributeKeys(req.auth!.tenantId);
+    res.json(keys);
   })
 );
 
@@ -128,6 +141,32 @@ contactsRouter.patch(
   })
 );
 
+/** Bulk delete contacts by explicit IDs or filter */
+contactsRouter.post(
+  "/bulk-delete",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const { contactIds, filter } = req.body || {};
+    const result = await deleteContactsBulk(req.auth!.tenantId, {
+      contactIds,
+      filter,
+    });
+    res.json(result);
+  })
+);
+
+/** Delete contacts in bulk via DELETE method */
+contactsRouter.delete(
+  "/bulk",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const { contactIds, filter } = req.body || {};
+    const result = await deleteContactsBulk(req.auth!.tenantId, {
+      contactIds,
+      filter,
+    });
+    res.json(result);
+  })
+);
+
 /** Delete a contact */
 contactsRouter.delete(
   "/:id",
@@ -141,7 +180,27 @@ contactsRouter.delete(
 );
 
 /**
- * Upload CSV or Excel file to import contacts with tags
+ * Upload CSV or Excel file to preview columns and suggested mappings
+ */
+contactsRouter.post(
+  "/preview",
+  upload.single("file"),
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ error: "Please upload a valid CSV or Excel file" });
+    }
+
+    try {
+      const preview = getSpreadsheetPreview(req.file.buffer);
+      return res.json(preview);
+    } catch (parseErr: any) {
+      return res.status(400).json({ error: `Failed to parse spreadsheet: ${parseErr.message}` });
+    }
+  })
+);
+
+/**
+ * Upload CSV or Excel file to import contacts with tags and custom column mappings
  */
 contactsRouter.post(
   "/import",
@@ -155,6 +214,15 @@ contactsRouter.post(
     const defaultTagsParam = req.body.tags || req.body.defaultTags;
     const defaultTags = defaultTagsParam ? normalizeTags(defaultTagsParam) : [];
 
+    let mapping: ColumnMapping | undefined;
+    if (req.body.mapping) {
+      try {
+        mapping = typeof req.body.mapping === "string" ? JSON.parse(req.body.mapping) : req.body.mapping;
+      } catch {
+        mapping = undefined;
+      }
+    }
+
     if (!channelId) {
       const channels = await listChannels(req.auth!.tenantId);
       if (channels.length === 0) {
@@ -165,14 +233,14 @@ contactsRouter.post(
 
     let rows;
     try {
-      rows = parseContactsFile(req.file.buffer);
+      rows = parseContactsFile(req.file.buffer, mapping);
     } catch (parseErr: any) {
       return res.status(400).json({ error: `Failed to parse spreadsheet: ${parseErr.message}` });
     }
 
     if (rows.length === 0) {
       return res.status(400).json({
-        error: "No contact rows found. Ensure the file contains headers like 'Name', 'Phone', 'Email', and 'Tags'.",
+        error: "No contact rows found. Ensure the mapped column contains valid contact numbers / IDs.",
       });
     }
 

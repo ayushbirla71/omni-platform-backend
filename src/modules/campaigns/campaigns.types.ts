@@ -25,6 +25,15 @@ export interface DripDefinition {
   steps: DripStep[];
 }
 
-export function interpolate(template: string, vars: Record<string, string | null>): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (_match, key) => vars[key] ?? "");
+export function interpolate(template: string, vars: Record<string, any>): string {
+  if (!template || typeof template !== "string") return "";
+  return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_match, path) => {
+    const parts = path.split(".");
+    let curr: any = vars;
+    for (const part of parts) {
+      if (curr === undefined || curr === null) return "";
+      curr = curr[part];
+    }
+    return curr !== undefined && curr !== null ? String(curr) : "";
+  });
 }

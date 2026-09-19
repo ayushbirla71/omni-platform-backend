@@ -1,4 +1,4 @@
-import { query, queryOne, withTransaction } from "../../db/pool";
+import { query, queryOne } from "../../db/pool";
 import { indexContact } from "../search/search.service";
 import * as XLSX from "xlsx";
 
@@ -22,6 +22,27 @@ export interface ContactImportRow {
   email?: string;
   tags?: string[];
   attributes?: Record<string, any>;
+}
+
+export interface ColumnMapping {
+  nameColumn?: string;
+  phoneColumn?: string;
+  emailColumn?: string;
+  tagsColumn?: string;
+  customFields?: Record<string, string>; // { [excelHeader]: attributeKey }
+}
+
+export interface SpreadsheetPreview {
+  headers: string[];
+  previewRows: Record<string, any>[];
+  totalRows: number;
+  suggestedMapping: {
+    nameColumn: string | null;
+    phoneColumn: string | null;
+    emailColumn: string | null;
+    tagsColumn: string | null;
+    customFields: Record<string, string>;
+  };
 }
 
 export interface ImportResult {
@@ -213,6 +234,74 @@ export async function deleteContact(tenantId: string, contactId: string): Promis
   return result.length > 0;
 }
 
+/** Bulk delete contacts by explicit IDs or filter criteria */
+export async function deleteContactsBulk(
+  tenantId: string,
+  params: {
+    contactIds?: string[];
+    filter?: {
+      channelId?: string;
+      tag?: string;
+      tags?: string[];
+      search?: string;
+      allowAll?: boolean;
+    };
+  }
+): Promise<{ deletedCount: number }> {
+  const { contactIds, filter } = params;
+
+  // 1. If explicit IDs are provided
+  if (Array.isArray(contactIds) && contactIds.length > 0) {
+    const res = await query(
+      "DELETE FROM contacts WHERE id = ANY($1::uuid[]) AND tenant_id = $2 RETURNING id",
+      [contactIds, tenantId]
+    );
+    return { deletedCount: res.length };
+  }
+
+  // 2. If filter criteria is provided
+  if (filter) {
+    const { channelId, tag, tags, search, allowAll } = filter;
+    const conditions: string[] = ["tenant_id = $1"];
+    const queryParams: any[] = [tenantId];
+
+    if (channelId && channelId !== "all") {
+      queryParams.push(channelId);
+      conditions.push(`channel_id = $${queryParams.length}`);
+    }
+
+    if (tag && tag !== "all" && tag.trim()) {
+      queryParams.push(JSON.stringify([tag.trim().toLowerCase()]));
+      conditions.push(`attributes->'tags' @> $${queryParams.length}::jsonb`);
+    } else if (tags && tags.length > 0) {
+      const cleanTags = normalizeTags(tags);
+      if (cleanTags.length > 0) {
+        queryParams.push(cleanTags);
+        conditions.push(`attributes->'tags' ?| $${queryParams.length}`);
+      }
+    }
+
+    if (search && search.trim()) {
+      queryParams.push(`%${search.trim().toLowerCase()}%`);
+      const pIdx = queryParams.length;
+      conditions.push(
+        `(LOWER(name) LIKE $${pIdx} OR LOWER(external_id) LIKE $${pIdx} OR LOWER(COALESCE(attributes->>'email', '')) LIKE $${pIdx})`
+      );
+    }
+
+    // Safety guard: If no filters were provided and allowAll is false, do not delete everything
+    if (conditions.length === 1 && !allowAll) {
+      return { deletedCount: 0 };
+    }
+
+    const sql = `DELETE FROM contacts WHERE ${conditions.join(" AND ")} RETURNING id`;
+    const res = await query(sql, queryParams);
+    return { deletedCount: res.length };
+  }
+
+  return { deletedCount: 0 };
+}
+
 /** List contacts with optional filtering by channel, tag, search query */
 export async function listContacts(
   tenantId: string,
@@ -265,6 +354,19 @@ export async function listTenantTags(tenantId: string): Promise<string[]> {
     [tenantId]
   );
   return rows.map((r) => r.tag).filter(Boolean);
+}
+
+/** List all distinct custom attribute keys across tenant contacts (e.g. company, product, price) */
+export async function listTenantAttributeKeys(tenantId: string): Promise<string[]> {
+  const rows = await query<{ attr_key: string }>(
+    `SELECT DISTINCT jsonb_object_keys(attributes) as attr_key
+     FROM contacts
+     WHERE tenant_id = $1 AND attributes IS NOT NULL AND jsonb_typeof(attributes) = 'object'
+     ORDER BY attr_key ASC`,
+    [tenantId]
+  );
+  const systemKeys = new Set(["tags", "email"]);
+  return rows.map((r) => r.attr_key).filter((k) => !systemKeys.has(k) && Boolean(k));
 }
 
 /** Count contacts matching audience criteria (for instant campaign preview) */
@@ -409,10 +511,136 @@ export async function importContactsFromRows(
   return result;
 }
 
+function sanitizeAttributeKey(str: string): string {
+  return (
+    str
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9_]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "field"
+  );
+}
+
 /**
- * Parse uploaded buffer (.csv, .xlsx, .xls) into structured ContactImportRow items
+ * Extract headers, sample rows, and suggested mappings for pre-import configuration
  */
-export function parseContactsFile(fileBuffer: Buffer): ContactImportRow[] {
+export function getSpreadsheetPreview(fileBuffer: Buffer): SpreadsheetPreview {
+  const workbook = XLSX.read(fileBuffer, { type: "buffer" });
+  const firstSheetName = workbook.SheetNames[0];
+  if (!firstSheetName) {
+    return {
+      headers: [],
+      previewRows: [],
+      totalRows: 0,
+      suggestedMapping: {
+        nameColumn: null,
+        phoneColumn: null,
+        emailColumn: null,
+        tagsColumn: null,
+        customFields: {},
+      },
+    };
+  }
+
+  const worksheet = workbook.Sheets[firstSheetName];
+  const jsonData: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+
+  if (jsonData.length === 0) {
+    return {
+      headers: [],
+      previewRows: [],
+      totalRows: 0,
+      suggestedMapping: {
+        nameColumn: null,
+        phoneColumn: null,
+        emailColumn: null,
+        tagsColumn: null,
+        customFields: {},
+      },
+    };
+  }
+
+  // Extract all unique headers across rows in order
+  const headerSet = new Set<string>();
+  for (const row of jsonData) {
+    for (const key of Object.keys(row)) {
+      if (key && key.trim()) headerSet.add(key.trim());
+    }
+  }
+  const headers = Array.from(headerSet);
+
+  let suggestedName: string | null = null;
+  let suggestedPhone: string | null = null;
+  let suggestedEmail: string | null = null;
+  let suggestedTags: string | null = null;
+  const suggestedCustom: Record<string, string> = {};
+
+  for (const header of headers) {
+    const norm = header.toLowerCase().trim().replace(/[\s_-]+/g, "");
+    if (
+      !suggestedName &&
+      (norm === "name" ||
+        norm === "fullname" ||
+        norm === "contactname" ||
+        norm === "customername" ||
+        norm === "clientname" ||
+        norm === "user")
+    ) {
+      suggestedName = header;
+    } else if (
+      !suggestedPhone &&
+      (norm === "phone" ||
+        norm === "phonenumber" ||
+        norm === "mobile" ||
+        norm === "mobilenumber" ||
+        norm === "contact" ||
+        norm === "contactnumber" ||
+        norm === "whatsapp" ||
+        norm === "whatsappnumber" ||
+        norm === "externalid" ||
+        norm === "number" ||
+        norm === "tel" ||
+        norm === "id")
+    ) {
+      suggestedPhone = header;
+    } else if (!suggestedEmail && (norm === "email" || norm === "emailaddress" || norm === "mail" || norm === "emailid")) {
+      suggestedEmail = header;
+    } else if (
+      !suggestedTags &&
+      (norm === "tag" ||
+        norm === "tags" ||
+        norm === "category" ||
+        norm === "categories" ||
+        norm === "label" ||
+        norm === "labels" ||
+        norm === "group" ||
+        norm === "groups" ||
+        norm === "segment")
+    ) {
+      suggestedTags = header;
+    } else {
+      suggestedCustom[header] = sanitizeAttributeKey(header);
+    }
+  }
+
+  return {
+    headers,
+    previewRows: jsonData.slice(0, 5),
+    totalRows: jsonData.length,
+    suggestedMapping: {
+      nameColumn: suggestedName,
+      phoneColumn: suggestedPhone,
+      emailColumn: suggestedEmail,
+      tagsColumn: suggestedTags,
+      customFields: suggestedCustom,
+    },
+  };
+}
+
+/**
+ * Parse uploaded buffer (.csv, .xlsx, .xls) into structured ContactImportRow items with optional explicit column mapping
+ */
+export function parseContactsFile(fileBuffer: Buffer, mapping?: ColumnMapping): ContactImportRow[] {
   const workbook = XLSX.read(fileBuffer, { type: "buffer" });
   const firstSheetName = workbook.SheetNames[0];
   if (!firstSheetName) return [];
@@ -429,32 +657,58 @@ export function parseContactsFile(fileBuffer: Buffer): ContactImportRow[] {
     let tags: string[] = [];
     const extraAttributes: Record<string, any> = {};
 
-    for (const [rawKey, rawVal] of Object.entries(item)) {
-      const key = rawKey.toLowerCase().trim().replace(/[\s_-]+/g, "");
-      const val = String(rawVal).trim();
-      if (!val) continue;
+    if (mapping) {
+      if (mapping.nameColumn && item[mapping.nameColumn] !== undefined) {
+        name = String(item[mapping.nameColumn]).trim() || undefined;
+      }
+      if (mapping.phoneColumn && item[mapping.phoneColumn] !== undefined) {
+        externalId = String(item[mapping.phoneColumn]).trim().replace(/\s+/g, "");
+      }
+      if (mapping.emailColumn && item[mapping.emailColumn] !== undefined) {
+        email = String(item[mapping.emailColumn]).trim() || undefined;
+      }
+      if (mapping.tagsColumn && item[mapping.tagsColumn] !== undefined) {
+        tags = normalizeTags(String(item[mapping.tagsColumn]));
+      }
+      if (mapping.customFields) {
+        for (const [colHeader, attrKey] of Object.entries(mapping.customFields)) {
+          if (!attrKey || !attrKey.trim()) continue;
+          const val = item[colHeader];
+          if (val !== undefined && val !== null && String(val).trim() !== "") {
+            extraAttributes[attrKey.trim()] = typeof val === "string" ? val.trim() : val;
+          }
+        }
+      }
+    } else {
+      // Auto-fallback mapping
+      for (const [rawKey, rawVal] of Object.entries(item)) {
+        const key = rawKey.toLowerCase().trim().replace(/[\s_-]+/g, "");
+        const val = String(rawVal).trim();
+        if (!val) continue;
 
-      if (key === "name" || key === "fullname" || key === "contactname" || key === "customername" || key === "user") {
-        name = val;
-      } else if (
-        key === "phone" ||
-        key === "phonenumber" ||
-        key === "mobile" ||
-        key === "mobilenumber" ||
-        key === "externalid" ||
-        key === "number" ||
-        key === "whatsapp" ||
-        key === "whatsappnumber" ||
-        key === "id"
-      ) {
-        // Clean phone number format
-        externalId = val.replace(/\s+/g, "");
-      } else if (key === "email" || key === "emailaddress" || key === "mail") {
-        email = val;
-      } else if (key === "tag" || key === "tags" || key === "category" || key === "label" || key === "labels" || key === "group") {
-        tags = normalizeTags(val);
-      } else {
-        extraAttributes[rawKey] = val;
+        if (key === "name" || key === "fullname" || key === "contactname" || key === "customername" || key === "user") {
+          name = val;
+        } else if (
+          key === "phone" ||
+          key === "phonenumber" ||
+          key === "mobile" ||
+          key === "mobilenumber" ||
+          key === "externalid" ||
+          key === "number" ||
+          key === "whatsapp" ||
+          key === "whatsappnumber" ||
+          key === "contactnumber" ||
+          key === "id"
+        ) {
+          // Clean phone number format
+          externalId = val.replace(/\s+/g, "");
+        } else if (key === "email" || key === "emailaddress" || key === "mail") {
+          email = val;
+        } else if (key === "tag" || key === "tags" || key === "category" || key === "label" || key === "labels" || key === "group") {
+          tags = normalizeTags(val);
+        } else {
+          extraAttributes[rawKey] = val;
+        }
       }
     }
 
