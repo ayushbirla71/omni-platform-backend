@@ -92,7 +92,7 @@ contactsRouter.get(
 contactsRouter.post(
   "/",
   asyncHandler(async (req: AuthedRequest, res: Response) => {
-    let { channelId, externalId, name, email, tags, attributes } = req.body || {};
+    let { channelId, externalId, name, email, tags, attributes, countryCode, defaultCountryCode } = req.body || {};
 
     if (!externalId) {
       return res.status(400).json({ error: "externalId / phone number is required" });
@@ -115,6 +115,7 @@ contactsRouter.post(
       email,
       tags,
       attributes,
+      countryCode: countryCode || defaultCountryCode || "91",
     });
 
     res.status(201).json(contact);
@@ -213,6 +214,7 @@ contactsRouter.post(
     let channelId = req.body.channelId as string | undefined;
     const defaultTagsParam = req.body.tags || req.body.defaultTags;
     const defaultTags = defaultTagsParam ? normalizeTags(defaultTagsParam) : [];
+    const defaultCountryCode = String(req.body.countryCode || req.body.defaultCountryCode || "91").replace(/[^\d]/g, "");
 
     let mapping: ColumnMapping | undefined;
     if (req.body.mapping) {
@@ -233,7 +235,7 @@ contactsRouter.post(
 
     let rows;
     try {
-      rows = parseContactsFile(req.file.buffer, mapping);
+      rows = parseContactsFile(req.file.buffer, mapping, defaultCountryCode);
     } catch (parseErr: any) {
       return res.status(400).json({ error: `Failed to parse spreadsheet: ${parseErr.message}` });
     }
@@ -244,7 +246,7 @@ contactsRouter.post(
       });
     }
 
-    const result = await importContactsFromRows(req.auth!.tenantId, channelId, rows, defaultTags);
+    const result = await importContactsFromRows(req.auth!.tenantId, channelId, rows, defaultTags, defaultCountryCode);
 
     res.json({
       success: true,
@@ -258,7 +260,7 @@ contactsRouter.post(
 contactsRouter.post(
   "/bulk",
   asyncHandler(async (req: AuthedRequest, res: Response) => {
-    let { channelId, contacts, tags: defaultTagsParam } = req.body || {};
+    let { channelId, contacts, tags: defaultTagsParam, countryCode, defaultCountryCode } = req.body || {};
 
     if (!Array.isArray(contacts) || contacts.length === 0) {
       return res.status(400).json({ error: "contacts must be a non-empty array" });
@@ -272,8 +274,9 @@ contactsRouter.post(
       channelId = channels[0].id;
     }
 
+    const cleanDefaultCode = String(countryCode || defaultCountryCode || "91").replace(/[^\d]/g, "");
     const defaultTags = defaultTagsParam ? normalizeTags(defaultTagsParam) : [];
-    const result = await importContactsFromRows(req.auth!.tenantId, channelId, contacts, defaultTags);
+    const result = await importContactsFromRows(req.auth!.tenantId, channelId, contacts, defaultTags, cleanDefaultCode);
 
     res.json({
       success: true,

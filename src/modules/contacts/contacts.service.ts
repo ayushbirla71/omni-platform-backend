@@ -75,6 +75,62 @@ export function normalizeTags(tags?: (string | null | undefined)[] | string): st
   );
 }
 
+/**
+ * Normalizes phone numbers into WhatsApp / E.164 compatible format (digits only with country code, no '+' prefix).
+ * Handles national numbers (10 digits) by prefixing the selected country code (defaults to '91' for India).
+ * Preserves non-phone external IDs (e.g. webchat UUIDs, telegram handles).
+ *
+ * @param rawPhone - The input phone number or channel external ID
+ * @param defaultCountryCode - Default country calling code without '+' (e.g. '91' for India, '1' for US). Defaults to '91'.
+ */
+export function normalizePhoneNumber(
+  rawPhone: string | number | null | undefined,
+  defaultCountryCode: string = "91"
+): string {
+  if (rawPhone === null || rawPhone === undefined) return "";
+  const str = String(rawPhone).trim();
+  if (!str) return "";
+
+  // If it's a non-phone channel external ID (e.g. webchat session UUID, telegram username like "tg_abc123")
+  if (/[a-zA-Z]/.test(str) && !str.startsWith("+")) {
+    return str;
+  }
+
+  const cleanDefaultCode = defaultCountryCode ? String(defaultCountryCode).replace(/[^\d]/g, "") : "91";
+
+  // Check if user entered with explicit + (e.g. "+91 9876543210", "+1 (415) 555-0199")
+  const hadPlus = str.startsWith("+");
+  let digits = str.replace(/[^\d]/g, "");
+  if (!digits) return str;
+
+  // If the user explicitly supplied +, trust the number's full digits including international code
+  if (hadPlus) {
+    return digits;
+  }
+
+  // Remove leading single 0 (trunk prefix used in UK, India, Australia, etc. e.g. 09876543210 or 07911123456)
+  if (digits.startsWith("0") && digits.length >= 10 && digits.length <= 12) {
+    digits = digits.replace(/^0+/, "");
+  }
+
+  // If standard 10-digit number and we have a default country code, prepend country code
+  if (digits.length === 10 && cleanDefaultCode) {
+    return `${cleanDefaultCode}${digits}`;
+  }
+
+  // If 9-digit number (common in UAE, Saudi Arabia, Australia, etc.)
+  if (digits.length === 9 && cleanDefaultCode && cleanDefaultCode !== "91" && cleanDefaultCode !== "1") {
+    return `${cleanDefaultCode}${digits}`;
+  }
+
+  // If 8-digit number (common in Singapore, Hong Kong, etc.)
+  if (digits.length === 8 && cleanDefaultCode && cleanDefaultCode !== "91" && cleanDefaultCode !== "1") {
+    return `${cleanDefaultCode}${digits}`;
+  }
+
+  return digits;
+}
+
 /** Find a contact by (channel, external id), or create it if this is the first time we've seen them. */
 export async function findOrCreateContact(params: {
   tenantId: string;
@@ -83,18 +139,68 @@ export async function findOrCreateContact(params: {
   name?: string;
   tags?: string[];
   attributes?: Record<string, any>;
+  defaultCountryCode?: string;
 }): Promise<Contact> {
-  const { tenantId, channelId, externalId, name, tags, attributes = {} } = params;
+  const { tenantId, channelId, externalId, name, tags, attributes = {}, defaultCountryCode = "91" } = params;
+  const normalizedExternalId = normalizePhoneNumber(externalId, defaultCountryCode);
 
-  const existing = await queryOne<Contact>(
+  // 1. Try exact match on normalized external ID
+  let existing = await queryOne<Contact>(
     "SELECT * FROM contacts WHERE channel_id = $1 AND external_id = $2",
-    [channelId, externalId]
+    [channelId, normalizedExternalId]
   );
+
+  // 2. If not found and raw was different, try raw
+  if (!existing && externalId !== normalizedExternalId) {
+    existing = await queryOne<Contact>(
+      "SELECT * FROM contacts WHERE channel_id = $1 AND external_id = $2",
+      [channelId, externalId.trim()]
+    );
+  }
+
+  // 3. Resilient fallback matching across national (10-digit) vs international (with country code):
+  // Case A: Webhook delivers "919876543210" (12 digits), DB has legacy "9876543210" (10 digits)
+  if (!existing && normalizedExternalId.length === 12 && normalizedExternalId.startsWith("91")) {
+    const tenDigit = normalizedExternalId.substring(2);
+    existing = await queryOne<Contact>(
+      "SELECT * FROM contacts WHERE channel_id = $1 AND external_id = $2",
+      [channelId, tenDigit]
+    );
+  }
+
+  // Case B: Webhook delivers "14155552671" (11 digits for US), DB has legacy "4155552671" (10 digits)
+  if (!existing && normalizedExternalId.length === 11 && normalizedExternalId.startsWith("1")) {
+    const tenDigit = normalizedExternalId.substring(1);
+    existing = await queryOne<Contact>(
+      "SELECT * FROM contacts WHERE channel_id = $1 AND external_id = $2",
+      [channelId, tenDigit]
+    );
+  }
+
+  // Case C: Contact created with 10 digits "9876543210", but DB already has "919876543210"
+  if (!existing && normalizedExternalId.length === 10) {
+    const withCountry = `91${normalizedExternalId}`;
+    existing = await queryOne<Contact>(
+      "SELECT * FROM contacts WHERE channel_id = $1 AND external_id = $2",
+      [channelId, withCountry]
+    );
+  }
 
   if (existing) {
     let shouldUpdate = false;
     let newName = existing.name;
     let newAttributes = existing.attributes || {};
+    let newExternalId = existing.external_id;
+
+    // Seamless migration: If existing contact was stored with 10 digits (national) and we now receive normalized E.164, upgrade external_id
+    if (
+      existing.external_id !== normalizedExternalId &&
+      normalizedExternalId.length >= 10 &&
+      !/[a-zA-Z]/.test(normalizedExternalId)
+    ) {
+      newExternalId = normalizedExternalId;
+      shouldUpdate = true;
+    }
 
     if (name && name.trim() && !existing.name) {
       newName = name.trim();
@@ -110,8 +216,8 @@ export async function findOrCreateContact(params: {
 
     if (shouldUpdate) {
       const updated = await queryOne<Contact>(
-        "UPDATE contacts SET name = $1, attributes = $2 WHERE id = $3 RETURNING *",
-        [newName, newAttributes, existing.id]
+        "UPDATE contacts SET external_id = $1, name = $2, attributes = $3 WHERE id = $4 RETURNING *",
+        [newExternalId, newName, newAttributes, existing.id]
       );
       return updated || existing;
     }
@@ -126,7 +232,7 @@ export async function findOrCreateContact(params: {
   const created = await queryOne<Contact>(
     `INSERT INTO contacts (tenant_id, channel_id, external_id, name, attributes)
      VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-    [tenantId, channelId, externalId, name || null, initialAttributes]
+    [tenantId, channelId, normalizedExternalId, name || null, initialAttributes]
   );
 
   indexContact({
@@ -150,8 +256,11 @@ export async function createContact(params: {
   email?: string;
   tags?: string[];
   attributes?: Record<string, any>;
+  countryCode?: string;
 }): Promise<Contact> {
-  const { tenantId, channelId, externalId, name, email, tags, attributes = {} } = params;
+  const { tenantId, channelId, externalId, name, email, tags, attributes = {}, countryCode = "91" } = params;
+
+  const normalizedExternalId = normalizePhoneNumber(externalId, countryCode);
 
   const mergedAttributes = {
     ...attributes,
@@ -167,7 +276,7 @@ export async function createContact(params: {
        name = COALESCE(EXCLUDED.name, contacts.name),
        attributes = contacts.attributes || EXCLUDED.attributes
      RETURNING *`,
-    [tenantId, channelId, externalId.trim(), name?.trim() || null, mergedAttributes]
+    [tenantId, channelId, normalizedExternalId, name?.trim() || null, mergedAttributes]
   );
 
   if (!contact) throw new Error("Failed to create contact");
@@ -447,7 +556,8 @@ export async function importContactsFromRows(
   tenantId: string,
   channelId: string,
   rows: ContactImportRow[],
-  defaultTags: string[] = []
+  defaultTags: string[] = [],
+  defaultCountryCode: string = "91"
 ): Promise<ImportResult> {
   const normalizedDefaultTags = normalizeTags(defaultTags);
   const result: ImportResult = {
@@ -466,6 +576,8 @@ export async function importContactsFromRows(
       continue;
     }
 
+    const normalizedExternalId = normalizePhoneNumber(rawExternalId, defaultCountryCode);
+
     const rowTags = normalizeTags(row.tags);
     const combinedTags = normalizeTags([...rowTags, ...normalizedDefaultTags]);
 
@@ -476,10 +588,28 @@ export async function importContactsFromRows(
     };
 
     try {
-      const existing = await queryOne<Contact>(
-        "SELECT id, attributes FROM contacts WHERE channel_id = $1 AND external_id = $2",
-        [channelId, rawExternalId]
+      // 1. Try match by normalized external ID
+      let existing = await queryOne<Contact>(
+        "SELECT id, attributes, external_id FROM contacts WHERE channel_id = $1 AND external_id = $2",
+        [channelId, normalizedExternalId]
       );
+
+      // 2. Try match by raw external ID if different
+      if (!existing && rawExternalId !== normalizedExternalId) {
+        existing = await queryOne<Contact>(
+          "SELECT id, attributes, external_id FROM contacts WHERE channel_id = $1 AND external_id = $2",
+          [channelId, rawExternalId]
+        );
+      }
+
+      // 3. Try match legacy 10-digit if normalized is 12-digit Indian number
+      if (!existing && normalizedExternalId.length === 12 && normalizedExternalId.startsWith("91")) {
+        const tenDigit = normalizedExternalId.substring(2);
+        existing = await queryOne<Contact>(
+          "SELECT id, attributes, external_id FROM contacts WHERE channel_id = $1 AND external_id = $2",
+          [channelId, tenDigit]
+        );
+      }
 
       if (existing) {
         const existingTags = existing.attributes?.tags || [];
@@ -491,15 +621,15 @@ export async function importContactsFromRows(
         };
 
         await query(
-          "UPDATE contacts SET name = COALESCE($1, name), attributes = $2 WHERE id = $3",
-          [row.name?.trim() || null, updatedAttrs, existing.id]
+          "UPDATE contacts SET external_id = $1, name = COALESCE($2, name), attributes = $3 WHERE id = $4",
+          [normalizedExternalId, row.name?.trim() || null, updatedAttrs, existing.id]
         );
         result.updated++;
       } else {
         const created = await queryOne<Contact>(
           `INSERT INTO contacts (tenant_id, channel_id, external_id, name, attributes)
            VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-          [tenantId, channelId, rawExternalId, row.name?.trim() || null, initialAttributes]
+          [tenantId, channelId, normalizedExternalId, row.name?.trim() || null, initialAttributes]
         );
         if (created) result.imported++;
       }
@@ -640,7 +770,11 @@ export function getSpreadsheetPreview(fileBuffer: Buffer): SpreadsheetPreview {
 /**
  * Parse uploaded buffer (.csv, .xlsx, .xls) into structured ContactImportRow items with optional explicit column mapping
  */
-export function parseContactsFile(fileBuffer: Buffer, mapping?: ColumnMapping): ContactImportRow[] {
+export function parseContactsFile(
+  fileBuffer: Buffer,
+  mapping?: ColumnMapping,
+  defaultCountryCode: string = "91"
+): ContactImportRow[] {
   const workbook = XLSX.read(fileBuffer, { type: "buffer" });
   const firstSheetName = workbook.SheetNames[0];
   if (!firstSheetName) return [];
@@ -662,7 +796,8 @@ export function parseContactsFile(fileBuffer: Buffer, mapping?: ColumnMapping): 
         name = String(item[mapping.nameColumn]).trim() || undefined;
       }
       if (mapping.phoneColumn && item[mapping.phoneColumn] !== undefined) {
-        externalId = String(item[mapping.phoneColumn]).trim().replace(/\s+/g, "");
+        const rawPhone = String(item[mapping.phoneColumn]).trim();
+        externalId = normalizePhoneNumber(rawPhone, defaultCountryCode);
       }
       if (mapping.emailColumn && item[mapping.emailColumn] !== undefined) {
         email = String(item[mapping.emailColumn]).trim() || undefined;
@@ -700,8 +835,8 @@ export function parseContactsFile(fileBuffer: Buffer, mapping?: ColumnMapping): 
           key === "contactnumber" ||
           key === "id"
         ) {
-          // Clean phone number format
-          externalId = val.replace(/\s+/g, "");
+          // Clean & normalize phone number format
+          externalId = normalizePhoneNumber(val, defaultCountryCode);
         } else if (key === "email" || key === "emailaddress" || key === "mail") {
           email = val;
         } else if (key === "tag" || key === "tags" || key === "category" || key === "label" || key === "labels" || key === "group") {
