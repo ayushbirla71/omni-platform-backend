@@ -1,7 +1,29 @@
-import { Router } from "express";
+import { NextFunction, Response, Router } from "express";
+import multer from "multer";
 import { AuthedRequest, requireAuth } from "../../middleware/auth";
 import { asyncHandler } from "../../middleware/async-handler";
 import { KnowledgeBaseService } from "./knowledge-base.service";
+import { MAX_DOCUMENT_UPLOAD_BYTES, extractDocumentText } from "./document-extract";
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_DOCUMENT_UPLOAD_BYTES, files: 1 },
+});
+
+/** Runs multer for a single "file" field and turns its errors into proper 4xx responses. */
+function receiveDocumentFile(req: AuthedRequest, res: Response, next: NextFunction) {
+  upload.single("file")(req, res, (err: unknown) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        const maxMb = MAX_DOCUMENT_UPLOAD_BYTES / (1024 * 1024);
+        return res.status(413).json({ error: `File is too large. Maximum size is ${maxMb}MB` });
+      }
+      return res.status(400).json({ error: `Invalid upload: ${err.message}` });
+    }
+    return next(err);
+  });
+}
 
 export const knowledgeBaseRouter = Router();
 knowledgeBaseRouter.use(requireAuth);
@@ -108,6 +130,55 @@ knowledgeBaseRouter.post(
       source_url,
       raw_content,
       metadata,
+    });
+
+    res.status(201).json(doc);
+  })
+);
+
+// POST /api/knowledge-bases/:id/documents/upload - Upload a .md/.txt/.pdf file, extract text & auto-index
+knowledgeBaseRouter.post(
+  "/:id/documents/upload",
+  receiveDocumentFile,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const tenantId = req.auth!.tenantId;
+
+    // Verify the KB belongs to this tenant before doing any parsing work
+    const kb = await KnowledgeBaseService.getKnowledgeBase(tenantId, req.params.id);
+    if (!kb) {
+      return res.status(404).json({ error: "Knowledge base not found" });
+    }
+
+    const file = (req as AuthedRequest & { file?: Express.Multer.File }).file;
+    if (!file) {
+      return res.status(400).json({ error: "A file is required (multipart field \"file\")" });
+    }
+
+    const extracted = await extractDocumentText(file.buffer, file.originalname, file.mimetype);
+
+    const rawTitle = typeof req.body.title === "string" ? req.body.title.trim() : "";
+    const fallbackTitle = file.originalname.replace(/\.[^.]+$/, "");
+    const title = (rawTitle || fallbackTitle).slice(0, 200);
+    if (!title) {
+      return res.status(400).json({ error: "Title is required" });
+    }
+
+    // A PDF is always "pdf"; for text files honour the user's choice between markdown and plain text.
+    const requestedType = req.body.source_type;
+    const sourceType =
+      extracted.sourceType !== "pdf" && (requestedType === "markdown" || requestedType === "text")
+        ? requestedType
+        : extracted.sourceType;
+
+    const doc = await KnowledgeBaseService.addDocument(tenantId, req.params.id, {
+      title,
+      source_type: sourceType,
+      raw_content: extracted.text,
+      metadata: {
+        filename: file.originalname.slice(0, 255),
+        size: file.size,
+        mimetype: file.mimetype,
+      },
     });
 
     res.status(201).json(doc);

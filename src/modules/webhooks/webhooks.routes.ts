@@ -5,6 +5,7 @@ import { findOrCreateContact } from "../contacts/contacts.service";
 import { findOrCreateOpenConversation } from "../conversations/conversations.service";
 import { recordInboundMessage, recordMessageStatusEvent } from "../messages/messages.service";
 import { runFlowForConversation, handleDeliveryStatusCallback } from "../flows/flow-engine-runner";
+import { applyDeliveryReceipt } from "../campaigns/campaigns.service";
 import { createOrder } from "../commerce/orders.service";
 import { getProductBySku } from "../commerce/products.service";
 import { asyncHandler } from "../../middleware/async-handler";
@@ -147,6 +148,18 @@ async function processInboundWebhook(
         errorCode: update.errorCode,
         errorMessage: update.errorMessage,
         timestamp: update.timestamp,
+      });
+
+      // Reflect the receipt on the campaign recipient that owns this message (no-op for non-campaign messages)
+      await applyDeliveryReceipt({
+        tenantId: channel.tenant_id,
+        providerMessageId: update.providerMessageId,
+        status: update.status,
+        errorCode: update.errorCode,
+        errorMessage: update.errorMessage,
+        timestamp: update.timestamp,
+      }).catch((err) => {
+        log.error(`campaign receipt update failed for ${update.providerMessageId}:`, err);
       });
 
       if (conversationId) {

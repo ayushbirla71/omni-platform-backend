@@ -9,9 +9,13 @@ export interface Campaign {
   name: string;
   type: "broadcast" | "drip" | "flow";
   definition: BroadcastDefinition | DripDefinition | FlowCampaignDefinition;
-  status: "draft" | "sending" | "completed";
+  status: "draft" | "sending" | "completed" | "partially_failed" | "failed";
   total_recipients?: number;
+  /** Accepted by the provider, no delivery receipt yet */
   sent_count?: number;
+  /** Provider confirmed delivery to the handset (not yet read) */
+  delivered_count?: number;
+  read_count?: number;
   completed_count?: number;
   failed_count?: number;
   pending_count?: number;
@@ -26,10 +30,15 @@ export interface CampaignRecipient {
   id: string;
   campaign_id: string;
   contact_id: string;
-  status: "pending" | "sent" | "failed" | "completed";
+  status: "pending" | "sent" | "delivered" | "read" | "failed" | "completed";
   current_step: number;
   next_send_at: string;
   last_error: string | null;
+  error_code?: string | null;
+  provider_message_id?: string | null;
+  delivered_at?: string | null;
+  read_at?: string | null;
+  failed_at?: string | null;
   updated_at: string;
   contact_name?: string | null;
   contact_external_id?: string;
@@ -90,17 +99,23 @@ export async function createCampaign(params: {
   });
 }
 
+/** Per-status recipient counts shared by the campaign list and details queries. */
+const RECIPIENT_COUNTS_SQL = `
+      COUNT(cr.id)::int as total_recipients,
+      COUNT(CASE WHEN cr.status = 'sent' THEN 1 END)::int as sent_count,
+      COUNT(CASE WHEN cr.status = 'delivered' THEN 1 END)::int as delivered_count,
+      COUNT(CASE WHEN cr.status = 'read' THEN 1 END)::int as read_count,
+      COUNT(CASE WHEN cr.status = 'completed' THEN 1 END)::int as completed_count,
+      COUNT(CASE WHEN cr.status = 'failed' THEN 1 END)::int as failed_count,
+      COUNT(CASE WHEN cr.status = 'pending' THEN 1 END)::int as pending_count`;
+
 export async function getCampaign(tenantId: string, campaignId: string): Promise<Campaign | null> {
   const sql = `
     SELECT
       c.*,
       ch.type AS channel_type,
       ch.display_name AS channel_display_name,
-      COUNT(cr.id)::int as total_recipients,
-      COUNT(CASE WHEN cr.status = 'sent' THEN 1 END)::int as sent_count,
-      COUNT(CASE WHEN cr.status = 'completed' THEN 1 END)::int as completed_count,
-      COUNT(CASE WHEN cr.status = 'failed' THEN 1 END)::int as failed_count,
-      COUNT(CASE WHEN cr.status = 'pending' THEN 1 END)::int as pending_count
+      ${RECIPIENT_COUNTS_SQL}
     FROM campaigns c
     LEFT JOIN channels ch ON ch.id = c.channel_id
     LEFT JOIN campaign_recipients cr ON cr.campaign_id = c.id
@@ -151,11 +166,7 @@ export async function listCampaigns(tenantId: string): Promise<Campaign[]> {
     `SELECT c.*,
        ch.type AS channel_type,
        ch.display_name AS channel_display_name,
-       COUNT(cr.id)::int as total_recipients,
-       COUNT(CASE WHEN cr.status = 'sent' THEN 1 END)::int as sent_count,
-       COUNT(CASE WHEN cr.status = 'completed' THEN 1 END)::int as completed_count,
-       COUNT(CASE WHEN cr.status = 'failed' THEN 1 END)::int as failed_count,
-       COUNT(CASE WHEN cr.status = 'pending' THEN 1 END)::int as pending_count
+       ${RECIPIENT_COUNTS_SQL}
      FROM campaigns c
      LEFT JOIN channels ch ON ch.id = c.channel_id
      LEFT JOIN campaign_recipients cr ON cr.campaign_id = c.id
@@ -203,7 +214,10 @@ export async function getCampaignRecipients(
   const total = countResult?.count || 0;
 
   // Query paginated rows
-  const queryParams = [...params, limit, offset];
+  // Tenant and channel are bound (never interpolated) and scope the latest-conversation lookup.
+  const queryParams = [...params, tenantId, campaign.channel_id, limit, offset];
+  const tenantParam = `$${queryParams.length - 3}`;
+  const channelParam = `$${queryParams.length - 2}`;
   const limitParam = `$${queryParams.length - 1}`;
   const offsetParam = `$${queryParams.length}`;
 
@@ -216,6 +230,11 @@ export async function getCampaignRecipients(
       cr.current_step,
       cr.next_send_at,
       cr.last_error,
+      cr.error_code,
+      cr.provider_message_id,
+      cr.delivered_at,
+      cr.read_at,
+      cr.failed_at,
       cr.updated_at,
       ct.name AS contact_name,
       ct.external_id AS contact_external_id,
@@ -226,7 +245,7 @@ export async function getCampaignRecipients(
     JOIN contacts ct ON ct.id = cr.contact_id
     LEFT JOIN LATERAL (
       SELECT id FROM conversations
-      WHERE contact_id = cr.contact_id AND tenant_id = '${tenantId}'
+      WHERE contact_id = cr.contact_id AND tenant_id = ${tenantParam} AND channel_id = ${channelParam}
       ORDER BY created_at DESC LIMIT 1
     ) conv ON true
     WHERE ${conditions.join(" AND ")}
@@ -264,13 +283,18 @@ export async function getCampaignAnalytics(tenantId: string, campaignId: string)
   );
 
   const total = campaign.total_recipients || 0;
-  const sent = campaign.sent_count || 0;
-  const completed = campaign.completed_count || 0;
+  const sent = campaign.sent_count || 0; // accepted by provider, no receipt yet
+  const delivered = campaign.delivered_count || 0;
+  const read = campaign.read_count || 0;
+  const completed = campaign.completed_count || 0; // drip: every step sent (no receipts tracked)
   const failed = campaign.failed_count || 0;
   const pending = campaign.pending_count || 0;
-  const deliveredTotal = sent + completed;
+  // "Delivered" only counts what the provider actually confirmed; plain "sent" is not delivery.
+  const deliveredTotal = delivered + read;
+  const acceptedTotal = sent + deliveredTotal + completed;
 
   const deliveryRate = total > 0 ? Math.round((deliveredTotal / total) * 100) : 0;
+  const acceptedRate = total > 0 ? Math.round((acceptedTotal / total) * 100) : 0;
   const failureRate = total > 0 ? Math.round((failed / total) * 100) : 0;
   const pendingRate = total > 0 ? Math.round((pending / total) * 100) : 0;
 
@@ -279,11 +303,15 @@ export async function getCampaignAnalytics(tenantId: string, campaignId: string)
     metrics: {
       totalRecipients: total,
       sentCount: sent,
+      deliveredCount: delivered,
+      readCount: read,
       completedCount: completed,
       deliveredTotal,
+      acceptedTotal,
       failedCount: failed,
       pendingCount: pending,
       deliveryRate,
+      acceptedRate,
       failureRate,
       pendingRate,
     },
@@ -322,12 +350,71 @@ export async function getDueDripRecipients(): Promise<
   );
 }
 
-/** A broadcast recipient sends exactly once — mark it sent, done. */
-export async function markBroadcastSent(recipientId: string): Promise<void> {
+/**
+ * A broadcast recipient sends exactly once — mark it sent (accepted by the provider).
+ * The provider message id lets later delivery receipts find this row.
+ */
+export async function markBroadcastSent(recipientId: string, providerMessageId?: string): Promise<void> {
   await query(
-    "UPDATE campaign_recipients SET status = 'sent', updated_at = now() WHERE id = $1",
-    [recipientId]
+    `UPDATE campaign_recipients
+     SET status = 'sent', provider_message_id = $2, last_error = NULL, error_code = NULL, updated_at = now()
+     WHERE id = $1`,
+    [recipientId, providerMessageId ?? null]
   );
+}
+
+type ReceiptStatus = "sent" | "delivered" | "read" | "failed";
+
+/**
+ * Applies a provider delivery receipt (webhook) to the campaign recipient that
+ * owns the provider message id. Scoped to the tenant that owns the channel the
+ * webhook arrived on, and monotonic so out-of-order receipts never downgrade a row:
+ *   sent -> delivered -> read   (a 'read' receipt may skip 'delivered')
+ *   sent -> failed              (a failure after delivery/read is ignored)
+ * Returns true when a campaign recipient was updated, false if the id isn't one of ours.
+ */
+export async function applyDeliveryReceipt(params: {
+  tenantId: string;
+  providerMessageId: string;
+  status: ReceiptStatus;
+  errorCode?: string;
+  errorMessage?: string;
+  timestamp: Date;
+}): Promise<boolean> {
+  const { tenantId, providerMessageId, status, errorCode, errorMessage, timestamp } = params;
+
+  if (status === "sent") return false; // 'sent' is the ack we already recorded at send time
+
+  let sql: string;
+  let values: any[];
+  if (status === "failed") {
+    sql = `UPDATE campaign_recipients cr
+           SET status = 'failed', last_error = $3, error_code = $4, failed_at = $5, updated_at = now()
+           FROM campaigns c
+           WHERE cr.provider_message_id = $1 AND c.id = cr.campaign_id AND c.tenant_id = $2
+             AND cr.status = 'sent'
+           RETURNING cr.id`;
+    values = [providerMessageId, tenantId, errorMessage || errorCode || "Delivery failed", errorCode ?? null, timestamp];
+  } else if (status === "delivered") {
+    sql = `UPDATE campaign_recipients cr
+           SET status = 'delivered', delivered_at = $3, updated_at = now()
+           FROM campaigns c
+           WHERE cr.provider_message_id = $1 AND c.id = cr.campaign_id AND c.tenant_id = $2
+             AND cr.status = 'sent'
+           RETURNING cr.id`;
+    values = [providerMessageId, tenantId, timestamp];
+  } else {
+    sql = `UPDATE campaign_recipients cr
+           SET status = 'read', read_at = $3, delivered_at = COALESCE(cr.delivered_at, $3), updated_at = now()
+           FROM campaigns c
+           WHERE cr.provider_message_id = $1 AND c.id = cr.campaign_id AND c.tenant_id = $2
+             AND cr.status IN ('sent', 'delivered')
+           RETURNING cr.id`;
+    values = [providerMessageId, tenantId, timestamp];
+  }
+
+  const rows = await query<{ id: string }>(sql, values);
+  return rows.length > 0;
 }
 
 /** A drip recipient just received one step's message; schedule the next one. */

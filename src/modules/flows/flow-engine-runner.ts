@@ -11,6 +11,16 @@ import {
 import { advanceFlow, resumeFlowOnDeliveryStatus } from "./flow-engine";
 import { scheduleDelayedFlowResume } from "../jobs/queue.service";
 
+export type FlowRunSkipReason = "locked" | "handed_off" | "no_flow" | "flow_unpublished" | "nothing_sent";
+
+/**
+ * What a flow pass actually did. `sent` means at least one message was accepted
+ * by the channel provider; `skipped` means nothing went out (and why).
+ */
+export type FlowRunOutcome =
+  | { status: "sent"; providerMessageId?: string }
+  | { status: "skipped"; reason: FlowRunSkipReason };
+
 /**
  * Called from the webhook handler after an inbound message is persisted,
  * or from a delayed queue worker waking up.
@@ -21,10 +31,10 @@ export async function runFlowForConversation(params: {
   defaultFlowId: string | null;
   incomingText?: string;
   resumeAtNodeId?: string;
-}): Promise<void> {
+}): Promise<FlowRunOutcome> {
   const { tenantId, conversationId, defaultFlowId, incomingText, resumeAtNodeId } = params;
 
-  const result = await withLock(`flow-lock:${conversationId}`, 10_000, async () => {
+  const result = await withLock<FlowRunOutcome>(`flow-lock:${conversationId}`, 10_000, async () => {
     let flowRun = await getActiveFlowRun(conversationId);
 
     if (!flowRun) {
@@ -32,17 +42,17 @@ export async function runFlowForConversation(params: {
       const latestRun = await getLatestFlowRun(conversationId);
       if (latestRun && latestRun.status === "handed_off") {
         console.log(`[flow-engine] conversation ${conversationId} is handed off to agent — skipping flow trigger`);
-        return;
+        return { status: "skipped", reason: "handed_off" };
       }
 
-      if (!defaultFlowId) return; // no flow configured for this channel
+      if (!defaultFlowId) return { status: "skipped", reason: "no_flow" }; // no flow configured for this channel
       flowRun = await createFlowRun({ conversationId, flowId: defaultFlowId });
     }
 
     const flow = await getFlow(tenantId, flowRun.flow_id);
     if (!flow || flow.status !== "published") {
       console.warn(`[flow-engine] flow ${flowRun.flow_id} is missing or not published — skipping`);
-      return;
+      return { status: "skipped", reason: "flow_unpublished" };
     }
 
     // Hydrate contact details & custom attributes from PostgreSQL
@@ -85,11 +95,14 @@ export async function runFlowForConversation(params: {
 
     // Send messages and record providerMessageId
     let lastProviderMessageId: string | undefined;
+    // The first message of the pass is the one a campaign recipient is tracked by
+    let firstProviderMessageId: string | undefined;
 
     for (const msg of advance.outboundMessages) {
       if (msg.type === "text") {
         const sent = await sendOutboundMessage({ tenantId, conversationId, text: msg.text });
         lastProviderMessageId = sent.provider_message_id;
+        firstProviderMessageId ??= sent.provider_message_id;
       } else if (msg.type === "template") {
         const sent = await sendOutboundMessage({
           tenantId,
@@ -104,6 +117,7 @@ export async function runFlowForConversation(params: {
           filename: msg.filename,
         });
         lastProviderMessageId = sent.provider_message_id;
+        firstProviderMessageId ??= sent.provider_message_id;
       }
     }
 
@@ -130,11 +144,17 @@ export async function runFlowForConversation(params: {
       variables: updatedVariables,
       status: advance.status === "awaiting_delivery" || advance.status === "waiting" ? "running" : advance.status,
     });
+
+    // A flow that starts with a wait/delay node sends nothing yet but is running as designed.
+    if (!firstProviderMessageId && !advance.scheduledResume) return { status: "skipped", reason: "nothing_sent" };
+    return { status: "sent", providerMessageId: firstProviderMessageId };
   });
 
   if (result === "locked") {
     console.warn(`[flow-engine] conversation ${conversationId} is already being processed — skipped this pass`);
+    return { status: "skipped", reason: "locked" };
   }
+  return result;
 }
 
 /**

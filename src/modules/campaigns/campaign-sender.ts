@@ -13,13 +13,29 @@ import {
 } from "./campaigns.service";
 import { BroadcastDefinition, DripDefinition, FlowCampaignDefinition, interpolate } from "./campaigns.types";
 import { findOrCreateOpenConversation } from "../conversations/conversations.service";
-import { runFlowForConversation } from "../flows/flow-engine-runner";
+import { runFlowForConversation, FlowRunSkipReason } from "../flows/flow-engine-runner";
 import { getFlow } from "../flows/flows.service";
 import { getMediaDownloadUrl } from "../../db/object-storage";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const SEND_DELAY_MS = 250;
+
+const SKIP_REASON_LABELS: Record<FlowRunSkipReason, string> = {
+  locked: "another flow pass was already running for this conversation",
+  handed_off: "conversation is handed off to a human agent",
+  no_flow: "no flow is configured",
+  flow_unpublished: "flow is missing or not published",
+  nothing_sent: "the flow produced no message to send",
+};
+
+const describeSkipReason = (reason: FlowRunSkipReason) => SKIP_REASON_LABELS[reason] ?? reason;
+
+/** Final campaign status once the send loop ends, based on per-recipient outcomes. */
+function resolveFinalCampaignStatus(sent: number, failed: number): "completed" | "partially_failed" | "failed" {
+  if (failed === 0) return "completed";
+  return sent === 0 ? "failed" : "partially_failed";
+}
 
 /**
  * Sends a 'broadcast' or 'flow' campaign to every pending recipient, right now.
@@ -54,99 +70,111 @@ export async function sendBroadcastNow(
   const recipients = await getRecipientsByStatus(campaignId, "pending");
   let sent = 0;
   let failed = 0;
+  let aborted = true;
 
-  for (const recipient of recipients) {
-    try {
-      const recipientVars = {
-        name: recipient.name || "",
-        phone: recipient.external_id || "",
-        email: recipient.attributes?.email || "",
-        ...(recipient.attributes || {}),
-        contact: {
+  try {
+    for (const recipient of recipients) {
+      try {
+        const recipientVars = {
           name: recipient.name || "",
-          external_id: recipient.external_id || "",
           phone: recipient.external_id || "",
           email: recipient.attributes?.email || "",
-          tags: recipient.attributes?.tags || [],
-          attributes: recipient.attributes || {},
           ...(recipient.attributes || {}),
-        },
-      };
-
-      if (flowId) {
-        // 1. Flow-driven campaign: instantiate or reopen conversation, then run flow engine
-        const conversation = await findOrCreateOpenConversation({
-          tenantId,
-          contactId: recipient.contact_id,
-          channelId: campaign.channel_id,
-        });
-
-        await runFlowForConversation({
-          tenantId,
-          conversationId: conversation.id,
-          defaultFlowId: flowId,
-        });
-
-        await markBroadcastSent(recipient.id);
-        sent++;
-      } else if (definition.templateName) {
-        // 2. WhatsApp Template broadcast with optional media header
-        const adapter = getAdapter(channel.type);
-        let resolvedHeaderValue = definition.headerValue;
-        if (!resolvedHeaderValue && definition.mediaStorageKey) {
-          try {
-            resolvedHeaderValue = await getMediaDownloadUrl(definition.mediaStorageKey, 7 * 86400);
-          } catch (storageErr) {
-            console.warn(`[campaign-sender] Failed generating presigned URL for key ${definition.mediaStorageKey}:`, storageErr);
-            resolvedHeaderValue = `/api/media/file?key=${encodeURIComponent(definition.mediaStorageKey)}`;
-          }
-        } else if (resolvedHeaderValue) {
-          resolvedHeaderValue = interpolate(resolvedHeaderValue, recipientVars);
-        }
-
-        const interpolatedParams: Record<string, string> = {};
-        if (definition.templateParams) {
-          for (const [key, val] of Object.entries(definition.templateParams)) {
-            interpolatedParams[key] = interpolate(val, recipientVars);
-          }
-        }
-
-        await adapter.send(
-          {
-            toExternalContactId: recipient.external_id,
-            type: "template",
-            templateName: definition.templateName,
-            templateLanguage: definition.templateLanguage || "en",
-            templateParams: interpolatedParams,
-            headerType: definition.headerType,
-            headerValue: resolvedHeaderValue,
-            filename: definition.filename,
+          contact: {
+            name: recipient.name || "",
+            external_id: recipient.external_id || "",
+            phone: recipient.external_id || "",
+            email: recipient.attributes?.email || "",
+            tags: recipient.attributes?.tags || [],
+            attributes: recipient.attributes || {},
+            ...(recipient.attributes || {}),
           },
-          channel.credentials || {}
-        );
-        await markBroadcastSent(recipient.id);
-        sent++;
-      } else {
-        // 3. Standard text broadcast message
-        const adapter = getAdapter(channel.type);
-        const text = interpolate(definition.text || "", recipientVars);
-        await adapter.send(
-          { toExternalContactId: recipient.external_id, type: "text", text },
-          channel.credentials || {}
-        );
-        await markBroadcastSent(recipient.id);
-        sent++;
+        };
+
+        if (flowId) {
+          // 1. Flow-driven campaign: instantiate or reopen conversation, then run flow engine
+          const conversation = await findOrCreateOpenConversation({
+            tenantId,
+            contactId: recipient.contact_id,
+            channelId: campaign.channel_id,
+          });
+
+          const outcome = await runFlowForConversation({
+            tenantId,
+            conversationId: conversation.id,
+            defaultFlowId: flowId,
+          });
+
+          if (outcome.status === "skipped") {
+            // The flow engine sent nothing (locked, handed off, unpublished, ...): not a success.
+            await markRecipientFailed(recipient.id, `Not sent: ${describeSkipReason(outcome.reason)}`);
+            failed++;
+          } else {
+            await markBroadcastSent(recipient.id, outcome.providerMessageId);
+            sent++;
+          }
+        } else if (definition.templateName) {
+          // 2. WhatsApp Template broadcast with optional media header
+          const adapter = getAdapter(channel.type);
+          let resolvedHeaderValue = definition.headerValue;
+          if (!resolvedHeaderValue && definition.mediaStorageKey) {
+            try {
+              resolvedHeaderValue = await getMediaDownloadUrl(definition.mediaStorageKey, 7 * 86400);
+            } catch (storageErr) {
+              console.warn(`[campaign-sender] Failed generating presigned URL for key ${definition.mediaStorageKey}:`, storageErr);
+              resolvedHeaderValue = `/api/media/file?key=${encodeURIComponent(definition.mediaStorageKey)}`;
+            }
+          } else if (resolvedHeaderValue) {
+            resolvedHeaderValue = interpolate(resolvedHeaderValue, recipientVars);
+          }
+
+          const interpolatedParams: Record<string, string> = {};
+          if (definition.templateParams) {
+            for (const [key, val] of Object.entries(definition.templateParams)) {
+              interpolatedParams[key] = interpolate(val, recipientVars);
+            }
+          }
+
+          const templateResult = await adapter.send(
+            {
+              toExternalContactId: recipient.external_id,
+              type: "template",
+              templateName: definition.templateName,
+              templateLanguage: definition.templateLanguage || "en",
+              templateParams: interpolatedParams,
+              headerType: definition.headerType,
+              headerValue: resolvedHeaderValue,
+              filename: definition.filename,
+            },
+            channel.credentials || {}
+          );
+          await markBroadcastSent(recipient.id, templateResult.providerMessageId);
+          sent++;
+        } else {
+          // 3. Standard text broadcast message
+          const adapter = getAdapter(channel.type);
+          const text = interpolate(definition.text || "", recipientVars);
+          const textResult = await adapter.send(
+            { toExternalContactId: recipient.external_id, type: "text", text },
+            channel.credentials || {}
+          );
+          await markBroadcastSent(recipient.id, textResult.providerMessageId);
+          sent++;
+        }
+      } catch (err) {
+        console.error(`[campaign-sender] Failed sending to recipient ${recipient.id}:`, err);
+        await markRecipientFailed(recipient.id, err instanceof Error ? err.message : String(err));
+        failed++;
       }
-    } catch (err) {
-      console.error(`[campaign-sender] Failed sending to recipient ${recipient.id}:`, err);
-      await markRecipientFailed(recipient.id, err instanceof Error ? err.message : String(err));
-      failed++;
+
+      await sleep(SEND_DELAY_MS);
     }
-
-    await sleep(SEND_DELAY_MS);
+    aborted = false;
+  } finally {
+    // Always leave the "sending" state, reflecting what actually happened. An aborted
+    // loop left recipients unprocessed, so it can never count as fully completed.
+    await setCampaignStatus(campaignId, resolveFinalCampaignStatus(sent, aborted ? failed + 1 : failed));
   }
-
-  await setCampaignStatus(campaignId, "completed");
   return { sent, failed };
 }
 
