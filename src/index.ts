@@ -48,6 +48,7 @@ import { webchatRouter, webchatTenantRouter } from "./modules/webchat/webchat.ro
 import { ensureMediaBucketExists } from "./db/object-storage";
 import { ensureSearchIndices } from "./db/elasticsearch";
 import { realtimeGateway } from "./modules/realtime/websocket.service";
+import { getPendingMigrations, describeBuild } from "./db/migration-status";
 
 import { runFlowForConversation } from "./modules/flows/flow-engine-runner";
 import { initFlowDelayWorker } from "./modules/jobs/queue.service";
@@ -163,6 +164,21 @@ realtimeGateway.init(server).catch((err) => {
 const port = Number(process.env.PORT) || 4000;
 server.listen(port, () => {
   logger.info(`omni-platform backend listening on :${port}`);
+  logger.info(`build: ${describeBuild()}`);
+
+  // Migrations are manual (`npm run migrate` / `migrate:prod`): shout if this build is running on an old schema
+  getPendingMigrations()
+    .then((pending) => {
+      if (pending.length > 0) {
+        logger.error(
+          `DATABASE MIGRATIONS PENDING: ${pending.join(", ")}. This build expects them; run "npm run migrate:prod" ` +
+            `(compiled) or "npm run migrate" and restart. Features that depend on them will fail until then.`
+        );
+      } else {
+        logger.info("Database schema is up to date (no pending migrations)");
+      }
+    })
+    .catch((err) => logger.error("Could not check pending migrations:", err));
 });
 
 /**

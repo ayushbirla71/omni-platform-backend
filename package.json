@@ -7,7 +7,9 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "migrate": "ts-node-dev --transpile-only src/db/migrate.ts",
-    "backfill:campaign-delivery": "ts-node-dev --transpile-only src/scripts/backfill-campaign-delivery.ts"
+    "migrate:prod": "node dist/db/migrate.js",
+    "backfill:campaign-delivery": "ts-node-dev --transpile-only src/scripts/backfill-campaign-delivery.ts",
+    "backfill:campaign-delivery:prod": "node dist/scripts/backfill-campaign-delivery.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1124.0",
