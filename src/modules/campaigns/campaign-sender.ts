@@ -16,8 +16,22 @@ import { findOrCreateOpenConversation } from "../conversations/conversations.ser
 import { runFlowForConversation, FlowRunSkipReason } from "../flows/flow-engine-runner";
 import { getFlow } from "../flows/flows.service";
 import { getMediaDownloadUrl } from "../../db/object-storage";
+import { syncRecipientWithMessageStatus } from "./campaign-delivery-sync";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Marks a recipient as accepted by the provider and stores the provider message id. A delivery
+ * receipt can beat this write (the webhook handler had no recipient to update yet), so afterwards
+ * pull in whatever status the message has already received.
+ */
+async function recordAcceptedSend(recipientId: string, tenantId: string, providerMessageId?: string): Promise<void> {
+  await markBroadcastSent(recipientId, providerMessageId);
+  if (!providerMessageId) return;
+  await syncRecipientWithMessageStatus(tenantId, providerMessageId).catch((err) => {
+    console.error(`[campaign-sender] Could not sync early delivery status for ${providerMessageId}:`, err);
+  });
+}
 
 const SEND_DELAY_MS = 250;
 
@@ -110,7 +124,7 @@ export async function sendBroadcastNow(
             await markRecipientFailed(recipient.id, `Not sent: ${describeSkipReason(outcome.reason)}`);
             failed++;
           } else {
-            await markBroadcastSent(recipient.id, outcome.providerMessageId);
+            await recordAcceptedSend(recipient.id, tenantId, outcome.providerMessageId);
             sent++;
           }
         } else if (definition.templateName) {
@@ -148,7 +162,7 @@ export async function sendBroadcastNow(
             },
             channel.credentials || {}
           );
-          await markBroadcastSent(recipient.id, templateResult.providerMessageId);
+          await recordAcceptedSend(recipient.id, tenantId, templateResult.providerMessageId);
           sent++;
         } else {
           // 3. Standard text broadcast message
@@ -158,7 +172,7 @@ export async function sendBroadcastNow(
             { toExternalContactId: recipient.external_id, type: "text", text },
             channel.credentials || {}
           );
-          await markBroadcastSent(recipient.id, textResult.providerMessageId);
+          await recordAcceptedSend(recipient.id, tenantId, textResult.providerMessageId);
           sent++;
         }
       } catch (err) {

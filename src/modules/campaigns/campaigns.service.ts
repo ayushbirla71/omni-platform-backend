@@ -109,6 +109,22 @@ const RECIPIENT_COUNTS_SQL = `
       COUNT(CASE WHEN cr.status = 'failed' THEN 1 END)::int as failed_count,
       COUNT(CASE WHEN cr.status = 'pending' THEN 1 END)::int as pending_count`;
 
+/**
+ * Delivery receipts keep arriving after a send run ends, so the stored status (set when the
+ * send loop finished) can go stale: a campaign stored as "completed" whose messages all turned
+ * out undeliverable must read as failed. Derive the outcome from the live recipient counts for
+ * finished broadcast/flow campaigns; draft/sending campaigns and drips keep their stored status.
+ */
+function withLiveStatus<T extends Campaign>(campaign: T): T {
+  const finished = ["completed", "partially_failed", "failed"].includes(campaign.status);
+  if (!finished || campaign.type === "drip") return campaign;
+  const total = campaign.total_recipients || 0;
+  const failed = campaign.failed_count || 0;
+  if (total > 0 && failed >= total) return { ...campaign, status: "failed" };
+  if (failed > 0) return { ...campaign, status: "partially_failed" };
+  return { ...campaign, status: "completed" };
+}
+
 export async function getCampaign(tenantId: string, campaignId: string): Promise<Campaign | null> {
   const sql = `
     SELECT
@@ -122,8 +138,9 @@ export async function getCampaign(tenantId: string, campaignId: string): Promise
     WHERE c.id = $1 AND c.tenant_id = $2
     GROUP BY c.id, ch.type, ch.display_name
   `;
-  const campaign = await queryOne<Campaign>(sql, [campaignId, tenantId]);
-  if (!campaign) return null;
+  const stored = await queryOne<Campaign>(sql, [campaignId, tenantId]);
+  if (!stored) return null;
+  const campaign = withLiveStatus(stored);
 
   // If this is a flow campaign or has a flowId, look up the flow name and status
   const flowId = (campaign.definition as any)?.flowId;
@@ -162,7 +179,7 @@ export async function getCampaignByIdUnscoped(campaignId: string): Promise<Campa
 }
 
 export async function listCampaigns(tenantId: string): Promise<Campaign[]> {
-  return query<Campaign>(
+  const rows = await query<Campaign>(
     `SELECT c.*,
        ch.type AS channel_type,
        ch.display_name AS channel_display_name,
@@ -175,6 +192,7 @@ export async function listCampaigns(tenantId: string): Promise<Campaign[]> {
      ORDER BY c.created_at DESC`,
     [tenantId]
   );
+  return rows.map(withLiveStatus);
 }
 
 export async function getCampaignRecipients(
@@ -282,6 +300,17 @@ export async function getCampaignAnalytics(tenantId: string, campaignId: string)
     [campaignId]
   );
 
+  // Why messages failed (provider error code + reason), most common first
+  const failureReasons = await query<{ error_code: string | null; reason: string; count: number }>(
+    `SELECT error_code, COALESCE(NULLIF(last_error, ''), 'Unknown error') AS reason, COUNT(id)::int AS count
+     FROM campaign_recipients
+     WHERE campaign_id = $1 AND status = 'failed'
+     GROUP BY error_code, COALESCE(NULLIF(last_error, ''), 'Unknown error')
+     ORDER BY count DESC
+     LIMIT 10`,
+    [campaignId]
+  );
+
   const total = campaign.total_recipients || 0;
   const sent = campaign.sent_count || 0; // accepted by provider, no receipt yet
   const delivered = campaign.delivered_count || 0;
@@ -317,6 +346,7 @@ export async function getCampaignAnalytics(tenantId: string, campaignId: string)
     },
     statusBreakdown: statusStats,
     stepBreakdown: stepStats,
+    failureReasons: failureReasons.map((r) => ({ errorCode: r.error_code, reason: r.reason, count: r.count })),
   };
 }
 
