@@ -1303,6 +1303,44 @@
               }
             }
           ]
+        },
+        {
+          "name": "Export Campaign Responses (Excel)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/campaigns/{{campaignId}}/export",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "campaigns",
+                "{{campaignId}}",
+                "export"
+              ]
+            },
+            "description": "Owner/admin only. Returns an .xlsx file: one row per recipient with delivery status and one column per flow question / template-button answer. Only answers given after this feature was deployed are included."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);",
+                  "pm.test('Is xlsx', () => pm.response.headers.get('Content-Type').includes('spreadsheetml'));"
+                ]
+              }
+            }
+          ]
         }
       ]
     },

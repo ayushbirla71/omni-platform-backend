@@ -5,11 +5,13 @@ import {
   getActiveFlowRun,
   getLatestFlowRun,
   createFlowRun,
+  attachFlowRunToCampaign,
   updateFlowRun,
   getFlow,
 } from "./flows.service";
 import { advanceFlow, resumeFlowOnDeliveryStatus } from "./flow-engine";
 import { scheduleDelayedFlowResume } from "../jobs/queue.service";
+import { recordCampaignAnswers } from "../campaigns/campaign-answers";
 
 export type FlowRunSkipReason = "locked" | "handed_off" | "no_flow" | "flow_unpublished" | "nothing_sent";
 
@@ -31,8 +33,10 @@ export async function runFlowForConversation(params: {
   defaultFlowId: string | null;
   incomingText?: string;
   resumeAtNodeId?: string;
+  /** Set by the campaign sender so the run's answers can be exported per recipient. */
+  campaign?: { campaignId: string; recipientId: string };
 }): Promise<FlowRunOutcome> {
-  const { tenantId, conversationId, defaultFlowId, incomingText, resumeAtNodeId } = params;
+  const { tenantId, conversationId, defaultFlowId, incomingText, resumeAtNodeId, campaign } = params;
 
   const result = await withLock<FlowRunOutcome>(`flow-lock:${conversationId}`, 10_000, async () => {
     let flowRun = await getActiveFlowRun(conversationId);
@@ -46,7 +50,16 @@ export async function runFlowForConversation(params: {
       }
 
       if (!defaultFlowId) return { status: "skipped", reason: "no_flow" }; // no flow configured for this channel
-      flowRun = await createFlowRun({ conversationId, flowId: defaultFlowId });
+      flowRun = await createFlowRun({
+        conversationId,
+        flowId: defaultFlowId,
+        campaignId: campaign?.campaignId,
+        campaignRecipientId: campaign?.recipientId,
+      });
+    } else if (campaign && !flowRun.campaign_id && flowRun.flow_id === defaultFlowId) {
+      // The contact is already in this flow: attribute the run to the campaign without restarting it.
+      await attachFlowRunToCampaign(flowRun.id, campaign.campaignId, campaign.recipientId);
+      flowRun = { ...flowRun, campaign_id: campaign.campaignId, campaign_recipient_id: campaign.recipientId };
     }
 
     const flow = await getFlow(tenantId, flowRun.flow_id);
@@ -144,6 +157,19 @@ export async function runFlowForConversation(params: {
       variables: updatedVariables,
       status: advance.status === "awaiting_delivery" || advance.status === "waiting" ? "running" : advance.status,
     });
+
+    if (flowRun.campaign_id && flowRun.campaign_recipient_id && advance.answers?.length) {
+      // Best effort: a failed export record must never break the live conversation.
+      await recordCampaignAnswers({
+        tenantId,
+        campaignId: flowRun.campaign_id,
+        campaignRecipientId: flowRun.campaign_recipient_id,
+        flowRunId: flowRun.id,
+        answers: advance.answers,
+      }).catch((err) => {
+        console.error(`[flow-engine] could not record campaign answers for run ${flowRun.id}:`, err);
+      });
+    }
 
     // A flow that starts with a wait/delay node sends nothing yet but is running as designed.
     if (!firstProviderMessageId && !advance.scheduledResume) return { status: "skipped", reason: "nothing_sent" };
