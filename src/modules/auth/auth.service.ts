@@ -1,6 +1,9 @@
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import { queryOne, withTransaction } from "../../db/pool";
+import { emailService } from "../email/email.service";
+import { logger } from "../../utils/logger";
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
@@ -36,12 +39,18 @@ export async function signup(params: {
   tenantName: string;
   email: string;
   password: string;
-}): Promise<{ token: string; tenantId: string; userId: string; role: string; email: string }> {
+}): Promise<{
+  token: string;
+  tenantId: string;
+  userId: string;
+  role: string;
+  email: string;
+}> {
   const { tenantName, email, password } = params;
 
   const existing = await queryOne(
     "SELECT id FROM users WHERE lower(email) = lower($1)",
-    [email]
+    [email],
   );
   if (existing) {
     throw new AuthError("An account with this email already exists");
@@ -52,14 +61,14 @@ export async function signup(params: {
   const { tenantId, userId } = await withTransaction(async (client) => {
     const tenantResult = await client.query(
       "INSERT INTO tenants (name) VALUES ($1) RETURNING id",
-      [tenantName]
+      [tenantName],
     );
     const tenantId = tenantResult.rows[0].id as string;
 
     const userResult = await client.query(
       `INSERT INTO users (tenant_id, email, password_hash, role, status)
        VALUES ($1, $2, $3, 'owner', 'active') RETURNING id`,
-      [tenantId, email, passwordHash]
+      [tenantId, email, passwordHash],
     );
     const userId = userResult.rows[0].id as string;
 
@@ -73,7 +82,13 @@ export async function signup(params: {
 export async function login(params: {
   email: string;
   password: string;
-}): Promise<{ token: string; tenantId: string; userId: string; role: string; email: string }> {
+}): Promise<{
+  token: string;
+  tenantId: string;
+  userId: string;
+  role: string;
+  email: string;
+}> {
   const { email, password } = params;
 
   const user = await queryOne<{
@@ -83,24 +98,44 @@ export async function login(params: {
     password_hash: string;
     role: string;
     status: string;
-  }>("SELECT id, tenant_id, email, password_hash, role, status FROM users WHERE lower(email) = lower($1)", [
-    email,
-  ]);
+  }>(
+    "SELECT id, tenant_id, email, password_hash, role, status FROM users WHERE lower(email) = lower($1)",
+    [email],
+  );
 
   if (!user) throw new AuthError("Invalid email or password");
-  if (user.status === "deactivated") throw new AuthError("Account has been deactivated. Please contact your workspace administrator.");
+  if (user.status === "deactivated")
+    throw new AuthError(
+      "Account has been deactivated. Please contact your workspace administrator.",
+    );
 
   const valid = await bcrypt.compare(password, user.password_hash);
   if (!valid) throw new AuthError("Invalid email or password");
 
   // Update last login timestamp asynchronously
-  queryOne("UPDATE users SET last_login_at = now() WHERE id = $1", [user.id]).catch(() => {});
+  queryOne("UPDATE users SET last_login_at = now() WHERE id = $1", [
+    user.id,
+  ]).catch(() => {});
 
-  const token = signToken({ userId: user.id, tenantId: user.tenant_id, role: user.role, email: user.email });
-  return { token, tenantId: user.tenant_id, userId: user.id, role: user.role, email: user.email };
+  const token = signToken({
+    userId: user.id,
+    tenantId: user.tenant_id,
+    role: user.role,
+    email: user.email,
+  });
+  return {
+    token,
+    tenantId: user.tenant_id,
+    userId: user.id,
+    role: user.role,
+    email: user.email,
+  };
 }
 
-export async function getProfile(userId: string, tenantId: string): Promise<UserProfile | null> {
+export async function getProfile(
+  userId: string,
+  tenantId: string,
+): Promise<UserProfile | null> {
   const row = await queryOne<{
     id: string;
     tenant_id: string;
@@ -127,7 +162,7 @@ export async function getProfile(userId: string, tenantId: string): Promise<User
      FROM users u
      JOIN tenants t ON t.id = u.tenant_id
      WHERE u.id = $1 AND u.tenant_id = $2`,
-    [userId, tenantId]
+    [userId, tenantId],
   );
 
   if (!row) return null;
@@ -157,14 +192,16 @@ export async function updateProfile(params: {
 
   const user = await queryOne<{ id: string; password_hash: string }>(
     "SELECT id, password_hash FROM users WHERE id = $1 AND tenant_id = $2",
-    [userId, tenantId]
+    [userId, tenantId],
   );
 
   if (!user) throw new AuthError("User not found");
 
   if (newPassword) {
     if (!currentPassword) {
-      throw new AuthError("Current password is required to change your password");
+      throw new AuthError(
+        "Current password is required to change your password",
+      );
     }
     const valid = await bcrypt.compare(currentPassword, user.password_hash);
     if (!valid) {
@@ -176,14 +213,14 @@ export async function updateProfile(params: {
     const newHash = await bcrypt.hash(newPassword, 12);
     await queryOne(
       "UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3",
-      [newHash, userId, tenantId]
+      [newHash, userId, tenantId],
     );
   }
 
   if (name !== undefined) {
     await queryOne(
       "UPDATE users SET name = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3",
-      [name.trim() || null, userId, tenantId]
+      [name.trim() || null, userId, tenantId],
     );
   }
 
@@ -192,8 +229,149 @@ export async function updateProfile(params: {
   return updated;
 }
 
+// ─────────────────────────────────────────────────────────
+// Forgot / reset password
+// ─────────────────────────────────────────────────────────
+
+const RESET_TOKEN_TTL_MINUTES = 30;
+const MIN_RESET_PASSWORD_LENGTH = 8;
+
+function hashResetToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+/**
+ * Issues a single-use reset link for the account with this email, if one
+ * exists. Callers must reply the same way whether or not it does (the
+ * route runs this in the background), so nothing here throws for an
+ * unknown email.
+ */
+export async function requestPasswordReset(
+  email: string,
+  ip: string | null,
+): Promise<void> {
+  const user = await queryOne<{
+    id: string;
+    email: string;
+    name: string | null;
+    status: string;
+  }>(
+    "SELECT id, email, name, status FROM users WHERE lower(email) = lower($1)",
+    [email],
+  );
+  if (!user || user.status === "deactivated") return;
+
+  const token = crypto.randomBytes(32).toString("hex");
+  const tokenHash = hashResetToken(token);
+
+  await withTransaction(async (client) => {
+    // A new request cancels any older links that haven't been used yet
+    await client.query(
+      "UPDATE password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL",
+      [user.id],
+    );
+    await client.query(
+      `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, request_ip)
+       VALUES ($1, $2, now() + make_interval(mins => $3), $4)`,
+      [user.id, tokenHash, RESET_TOKEN_TTL_MINUTES, ip],
+    );
+  });
+
+  const frontendUrl = (
+    process.env.FRONTEND_URL || "http://localhost:4000"
+  ).replace(/\/+$/, "");
+  const resetUrl = `${frontendUrl}/reset-password?token=${token}`;
+
+  const result = await emailService.sendPasswordResetEmail({
+    to: user.email,
+    userName: user.name || user.email,
+    resetUrl,
+    expiresInMinutes: RESET_TOKEN_TTL_MINUTES,
+  });
+
+  // Dev fallback: without SMTP the email is only simulated, so print the link to test locally
+  if (result.simulated && process.env.NODE_ENV !== "production") {
+    logger.info(
+      `[auth] Password reset link for ${user.email} (SMTP not configured): ${resetUrl}`,
+    );
+  }
+}
+
+/** True when the token exists, hasn't been used, hasn't expired and belongs to an active account. */
+export async function validateResetToken(token: string): Promise<boolean> {
+  const row = await queryOne(
+    `SELECT prt.id
+       FROM password_reset_tokens prt
+       JOIN users u ON u.id = prt.user_id
+      WHERE prt.token_hash = $1
+        AND prt.used_at IS NULL
+        AND prt.expires_at > now()
+        AND u.status <> 'deactivated'`,
+    [hashResetToken(token)],
+  );
+  return !!row;
+}
+
+export async function resetPassword(
+  token: string,
+  newPassword: string,
+): Promise<void> {
+  if (newPassword.length < MIN_RESET_PASSWORD_LENGTH) {
+    throw new AuthError(
+      `Password must be at least ${MIN_RESET_PASSWORD_LENGTH} characters`,
+    );
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 12);
+
+  const user = await withTransaction(async (client) => {
+    // FOR UPDATE so two submissions of the same link can't both succeed
+    const tokenResult = await client.query(
+      `SELECT prt.id, prt.user_id, u.email, u.name
+         FROM password_reset_tokens prt
+         JOIN users u ON u.id = prt.user_id
+        WHERE prt.token_hash = $1
+          AND prt.used_at IS NULL
+          AND prt.expires_at > now()
+          AND u.status <> 'deactivated'
+        FOR UPDATE OF prt`,
+      [hashResetToken(token)],
+    );
+    const row = tokenResult.rows[0] as
+      | { id: string; user_id: string; email: string; name: string | null }
+      | undefined;
+    if (!row) throw new AuthError("This reset link is invalid or has expired");
+
+    await client.query(
+      "UPDATE users SET password_hash = $1, password_changed_at = now(), updated_at = now() WHERE id = $2",
+      [passwordHash, row.user_id],
+    );
+    await client.query(
+      "UPDATE password_reset_tokens SET used_at = now() WHERE id = $1",
+      [row.id],
+    );
+    await client.query(
+      "DELETE FROM password_reset_tokens WHERE user_id = $1 AND id <> $2",
+      [row.user_id, row.id],
+    );
+
+    return row;
+  });
+
+  emailService
+    .sendPasswordChangedEmail({
+      to: user.email,
+      userName: user.name || user.email,
+    })
+    .catch((err) =>
+      logger.error("[auth] Failed to send password changed email:", err),
+    );
+}
+
 function signToken(payload: AuthTokenPayload): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions);
+  return jwt.sign(payload, JWT_SECRET, {
+    expiresIn: JWT_EXPIRES_IN,
+  } as jwt.SignOptions);
 }
 
 export function verifyToken(token: string): AuthTokenPayload {

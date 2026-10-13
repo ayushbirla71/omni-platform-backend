@@ -369,6 +369,100 @@ class EmailService {
       html,
     });
   }
+
+  public async sendPasswordResetEmail(params: {
+    to: string;
+    userName: string;
+    resetUrl: string;
+    expiresInMinutes: number;
+  }): Promise<{ success: boolean; simulated: boolean; error?: string }> {
+    const { to, resetUrl, expiresInMinutes } = params;
+    const userName = escapeHtml(params.userName);
+    const safeUrl = escapeHtml(resetUrl);
+
+    const html = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
+        <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); padding: 24px 32px; color: #ffffff;">
+          <h1 style="margin: 0; font-size: 20px; font-weight: 700;">Reset your password</h1>
+          <p style="margin: 4px 0 0; font-size: 13px; opacity: 0.9;">Omni Platform</p>
+        </div>
+        <div style="padding: 32px; color: #334155;">
+          <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6;">
+            Hello <strong>${userName}</strong>,<br/>
+            We received a request to reset the password for your Omni Platform account. Click the button below to choose a new password.
+          </p>
+          <div style="text-align: center; margin: 28px 0;">
+            <a href="${safeUrl}" style="display: inline-block; background-color: #4f46e5; color: #ffffff; text-decoration: none; font-size: 14px; font-weight: 600; padding: 12px 28px; border-radius: 8px;">Reset Password</a>
+          </div>
+          <p style="margin: 0 0 8px; font-size: 13px; color: #64748b; line-height: 1.5;">
+            This link expires in <strong>${expiresInMinutes} minutes</strong> and can be used only once.
+          </p>
+          <p style="margin: 0 0 20px; font-size: 12px; color: #64748b; line-height: 1.5; word-break: break-all;">
+            If the button doesn't work, copy this link into your browser:<br/>
+            <a href="${safeUrl}" style="color: #4f46e5;">${safeUrl}</a>
+          </p>
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; font-size: 12px; color: #64748b; line-height: 1.5;">
+            If you didn't ask to reset your password, you can ignore this email. Your password won't change.
+          </div>
+        </div>
+        <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 32px; text-align: center; font-size: 12px; color: #94a3b8;">
+          © ${new Date().getFullYear()} Omni Platform SaaS. All rights reserved.
+        </div>
+      </div>
+    `;
+
+    const text =
+      `Hello ${params.userName},\n\n` +
+      `We received a request to reset the password for your Omni Platform account.\n` +
+      `Open this link to choose a new password:\n\n${resetUrl}\n\n` +
+      `This link expires in ${expiresInMinutes} minutes and can be used only once.\n\n` +
+      `If you didn't ask to reset your password, you can ignore this email. Your password won't change.`;
+
+    return this.sendEmail({ to, subject: "Reset your Omni Platform password", html, text });
+  }
+
+  public async sendPasswordChangedEmail(params: { to: string; userName: string }): Promise<void> {
+    const { to } = params;
+    const userName = escapeHtml(params.userName);
+    const changedAt = new Date().toUTCString();
+
+    const html = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
+        <div style="background: #0f172a; padding: 24px 32px; color: #ffffff; border-bottom: 3px solid #059669;">
+          <h1 style="margin: 0; font-size: 20px; font-weight: 700;">Your password was changed</h1>
+          <p style="margin: 4px 0 0; font-size: 13px; color: #94a3b8;">Security notice</p>
+        </div>
+        <div style="padding: 32px; color: #334155;">
+          <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6;">
+            Hello <strong>${userName}</strong>,<br/>
+            The password for your Omni Platform account was reset on <strong>${changedAt}</strong>. For your security, all existing sessions have been logged out.
+          </p>
+          <div style="background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 14px; font-size: 13px; color: #991b1b; line-height: 1.5;">
+            If you didn't make this change, reset your password again right away using "Forgot password?" on the login page, and contact your workspace administrator.
+          </div>
+        </div>
+        <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 32px; text-align: center; font-size: 12px; color: #94a3b8;">
+          © ${new Date().getFullYear()} Omni Platform SaaS. All rights reserved.
+        </div>
+      </div>
+    `;
+
+    const text =
+      `Hello ${params.userName},\n\n` +
+      `The password for your Omni Platform account was reset on ${changedAt}. All existing sessions have been logged out.\n\n` +
+      `If you didn't make this change, reset your password again right away using "Forgot password?" on the login page, and contact your workspace administrator.`;
+
+    await this.sendEmail({ to, subject: "Your Omni Platform password was changed", html, text });
+  }
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 export const emailService = new EmailService();

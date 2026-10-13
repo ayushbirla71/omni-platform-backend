@@ -22,6 +22,10 @@
       "value": ""
     },
     {
+      "key": "resetToken",
+      "value": ""
+    },
+    {
       "key": "whatsappChannelId",
       "value": ""
     },
@@ -162,6 +166,94 @@
               }
             }
           ]
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/forgot-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "forgot-password"
+              ]
+            },
+            "description": "Always returns 200 with the same message whether or not the account exists. Rate limited: 5 per IP and 3 per email every 15 minutes (429 after that). Without SMTP configured, the reset link is printed in the backend log.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"postman-test@example.com\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Validate Reset Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/reset-password/validate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "reset-password",
+                "validate"
+              ]
+            },
+            "description": "Set the resetToken collection variable to the token from the emailed link (?token=...). Returns 200 { valid: true } or 400 when invalid, used or expired.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{resetToken}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/reset-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "reset-password"
+              ]
+            },
+            "description": "Sets a new password (min 8 characters). The link can only be used once, and all existing sessions are logged out. Returns 400 for an invalid or expired token.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{resetToken}}\",\n  \"password\": \"newSecret123\"\n}"
+            }
+          },
+          "response": []
         }
       ]
     },
