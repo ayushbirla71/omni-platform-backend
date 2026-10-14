@@ -233,11 +233,21 @@ export async function updateProfile(params: {
 // Forgot / reset password
 // ─────────────────────────────────────────────────────────
 
-const RESET_TOKEN_TTL_MINUTES = 30;
-const MIN_RESET_PASSWORD_LENGTH = 8;
+const PASSWORD_RESET_TOKEN_TTL_MINUTES =
+  Number(process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES) || 30;
+const MIN_PASSWORD_RESET_LENGTH =
+  Number(process.env.MIN_PASSWORD_RESET_LENGTH) || 8;
 
 function hashResetToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+export async function isAccountDeactivated(email: string): Promise<boolean> {
+  const user = await queryOne<{ status: string }>(
+    "SELECT status FROM users WHERE lower(email) = lower($1)",
+    [email],
+  );
+  return user?.status === "deactivated";
 }
 
 /**
@@ -273,7 +283,7 @@ export async function requestPasswordReset(
     await client.query(
       `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, request_ip)
        VALUES ($1, $2, now() + make_interval(mins => $3), $4)`,
-      [user.id, tokenHash, RESET_TOKEN_TTL_MINUTES, ip],
+      [user.id, tokenHash, PASSWORD_RESET_TOKEN_TTL_MINUTES, ip],
     );
   });
 
@@ -286,7 +296,7 @@ export async function requestPasswordReset(
     to: user.email,
     userName: user.name || user.email,
     resetUrl,
-    expiresInMinutes: RESET_TOKEN_TTL_MINUTES,
+    expiresInMinutes: PASSWORD_RESET_TOKEN_TTL_MINUTES,
   });
 
   // Dev fallback: without SMTP the email is only simulated, so print the link to test locally
@@ -316,9 +326,9 @@ export async function resetPassword(
   token: string,
   newPassword: string,
 ): Promise<void> {
-  if (newPassword.length < MIN_RESET_PASSWORD_LENGTH) {
+  if (newPassword.length < MIN_PASSWORD_RESET_LENGTH) {
     throw new AuthError(
-      `Password must be at least ${MIN_RESET_PASSWORD_LENGTH} characters`,
+      `Password must be at least ${MIN_PASSWORD_RESET_LENGTH} characters`,
     );
   }
 
