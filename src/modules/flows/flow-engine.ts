@@ -21,6 +21,13 @@ export interface ScheduledResume {
   targetNodeId: string;
 }
 
+/** A question the contact answered during this pass (input node or template button). */
+export interface FlowAnswer {
+  nodeId: string;
+  question: string;
+  answer: string;
+}
+
 export interface AdvanceResult {
   nextNodeId: string | null;
   variables: Record<string, any>;
@@ -28,6 +35,8 @@ export interface AdvanceResult {
   /** Messages to send out, in order, as this pass through the graph executes. */
   outboundMessages: OutboundFlowMessage[];
   scheduledResume?: ScheduledResume;
+  /** Questions answered during this pass, in order. Set by `advanceFlow`. */
+  answers?: FlowAnswer[];
 }
 
 function getNode(def: FlowDefinition, id: string): FlowNode | undefined {
@@ -114,6 +123,20 @@ export async function advanceFlow(
   resumeAtNodeId?: string,
   context?: { tenantId?: string; conversationId?: string }
 ): Promise<AdvanceResult> {
+  // Collected as a side channel so the many early returns below stay untouched.
+  const answers: FlowAnswer[] = [];
+  const result = await runFlowSteps(def, state, answers, incomingText, resumeAtNodeId, context);
+  return { ...result, answers };
+}
+
+async function runFlowSteps(
+  def: FlowDefinition,
+  state: { currentNodeId: string | null; variables: Record<string, any> },
+  answers: FlowAnswer[],
+  incomingText?: string,
+  resumeAtNodeId?: string,
+  context?: { tenantId?: string; conversationId?: string }
+): Promise<AdvanceResult> {
   let nodeId: string | null = resumeAtNodeId ?? state.currentNodeId ?? def.entryNodeId;
   const variables = { ...state.variables };
   if (incomingText !== undefined) {
@@ -158,6 +181,11 @@ export async function advanceFlow(
         const alreadyWaitingHere = state.currentNodeId === node.id;
         if (alreadyWaitingHere && pendingReply !== undefined) {
           variables[node.saveAs] = pendingReply;
+          answers.push({
+            nodeId: node.id,
+            question: interpolate(node.prompt, variables),
+            answer: pendingReply,
+          });
           pendingReply = undefined;
           nodeId = resolvePortNext(node, "continue");
           continue;
@@ -173,6 +201,13 @@ export async function advanceFlow(
         if (alreadyWaitingHere && pendingReply !== undefined) {
           if (node.saveAs) {
             variables[node.saveAs] = pendingReply;
+          }
+          if (node.saveAs || (node.buttons && node.buttons.length > 0)) {
+            answers.push({
+              nodeId: node.id,
+              question: node.templateName,
+              answer: pendingReply,
+            });
           }
 
           // Match incoming reply against configured button actions (case-insensitive trim)
