@@ -1862,7 +1862,7 @@
                 "search?q=hello"
               ]
             },
-            "description": ""
+            "description": "Returns { messages: [{id, conversationId, text, direction, createdAt}], contacts: [{id, name, externalId, channelType, channelName}] }. Optional query params: type=all|messages|contacts (default all), limit=1-50 (default 20). Contacts match by name or phone number."
           },
           "response": [],
           "event": [

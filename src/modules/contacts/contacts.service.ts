@@ -1,6 +1,27 @@
 import { query, queryOne } from "../../db/pool";
-import { indexContact } from "../search/search.service";
+import { indexContact, removeContactsFromIndex } from "../search/search.service";
+import { logger } from "../../utils/logger";
 import * as XLSX from "xlsx";
+
+const log = logger.child({ module: "contacts-service" });
+
+/** Keeps the search index in step with Postgres; failures never block the contact write. */
+function syncContactIndex(contact: Pick<Contact, "id" | "tenant_id" | "name" | "external_id">): void {
+  indexContact({
+    tenantId: contact.tenant_id,
+    contactId: contact.id,
+    name: contact.name,
+    externalId: contact.external_id,
+  }).catch((err) => {
+    log.warn("Elasticsearch contact indexing failed (non-fatal)", { contactId: contact.id }, err);
+  });
+}
+
+function removeContactsFromSearch(contactIds: string[]): void {
+  removeContactsFromIndex(contactIds).catch((err) => {
+    log.warn("Elasticsearch contact removal failed (non-fatal)", { count: contactIds.length }, err);
+  });
+}
 
 export interface Contact {
   id: string;
@@ -219,6 +240,7 @@ export async function findOrCreateContact(params: {
         "UPDATE contacts SET external_id = $1, name = $2, attributes = $3 WHERE id = $4 RETURNING *",
         [newExternalId, newName, newAttributes, existing.id]
       );
+      if (updated) syncContactIndex(updated);
       return updated || existing;
     }
     return existing;
@@ -235,14 +257,7 @@ export async function findOrCreateContact(params: {
     [tenantId, channelId, normalizedExternalId, name || null, initialAttributes]
   );
 
-  indexContact({
-    tenantId,
-    contactId: created!.id,
-    name: created!.name,
-    externalId: created!.external_id,
-  }).catch((err) => {
-    console.error("[contacts] Elasticsearch indexing failed (non-fatal):", err);
-  });
+  syncContactIndex(created!);
 
   return created!;
 }
@@ -281,14 +296,7 @@ export async function createContact(params: {
 
   if (!contact) throw new Error("Failed to create contact");
 
-  indexContact({
-    tenantId,
-    contactId: contact.id,
-    name: contact.name,
-    externalId: contact.external_id,
-  }).catch((err) => {
-    console.error("[contacts] Elasticsearch indexing failed (non-fatal):", err);
-  });
+  syncContactIndex(contact);
 
   return contact;
 }
@@ -331,6 +339,7 @@ export async function updateContact(
     [params.name !== undefined ? params.name : existing.name, updatedAttributes, contactId, tenantId]
   );
 
+  if (updated) syncContactIndex(updated);
   return updated;
 }
 
@@ -340,6 +349,7 @@ export async function deleteContact(tenantId: string, contactId: string): Promis
     "DELETE FROM contacts WHERE id = $1 AND tenant_id = $2 RETURNING id",
     [contactId, tenantId]
   );
+  if (result.length > 0) removeContactsFromSearch([contactId]);
   return result.length > 0;
 }
 
@@ -361,10 +371,11 @@ export async function deleteContactsBulk(
 
   // 1. If explicit IDs are provided
   if (Array.isArray(contactIds) && contactIds.length > 0) {
-    const res = await query(
+    const res = await query<{ id: string }>(
       "DELETE FROM contacts WHERE id = ANY($1::uuid[]) AND tenant_id = $2 RETURNING id",
       [contactIds, tenantId]
     );
+    removeContactsFromSearch(res.map((row) => row.id));
     return { deletedCount: res.length };
   }
 
@@ -404,7 +415,8 @@ export async function deleteContactsBulk(
     }
 
     const sql = `DELETE FROM contacts WHERE ${conditions.join(" AND ")} RETURNING id`;
-    const res = await query(sql, queryParams);
+    const res = await query<{ id: string }>(sql, queryParams);
+    removeContactsFromSearch(res.map((row) => row.id));
     return { deletedCount: res.length };
   }
 
@@ -620,18 +632,23 @@ export async function importContactsFromRows(
           tags: mergedTags,
         };
 
-        await query(
-          "UPDATE contacts SET external_id = $1, name = COALESCE($2, name), attributes = $3 WHERE id = $4",
+        const updated = await queryOne<Contact>(
+          `UPDATE contacts SET external_id = $1, name = COALESCE($2, name), attributes = $3
+           WHERE id = $4 RETURNING *`,
           [normalizedExternalId, row.name?.trim() || null, updatedAttrs, existing.id]
         );
+        if (updated) syncContactIndex(updated);
         result.updated++;
       } else {
         const created = await queryOne<Contact>(
           `INSERT INTO contacts (tenant_id, channel_id, external_id, name, attributes)
-           VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
           [tenantId, channelId, normalizedExternalId, row.name?.trim() || null, initialAttributes]
         );
-        if (created) result.imported++;
+        if (created) {
+          syncContactIndex(created);
+          result.imported++;
+        }
       }
     } catch (err: any) {
       result.errors.push(`Row ${i + 1} (${rawExternalId}): ${err?.message || "Insert failed"}`);

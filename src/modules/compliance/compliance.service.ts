@@ -2,6 +2,7 @@ import { query, queryOne } from "../../db/pool";
 import { getMongoDb } from "../../db/mongo";
 import { AuditService } from "../audit/audit.service";
 import { logger } from "../../utils/logger";
+import { removeContactsFromIndex } from "../search/search.service";
 
 const log = logger.child({ module: "compliance-service" });
 
@@ -171,6 +172,9 @@ export class ComplianceService {
       params.tenantId,
     ]);
     await query("DELETE FROM contacts WHERE id = $1 AND tenant_id = $2", [params.contactId, params.tenantId]);
+    removeContactsFromIndex([params.contactId]).catch((err) => {
+      log.warn("Failed to remove erased contact from search index", { contactId: params.contactId }, err);
+    });
 
     // Audit log
     await AuditService.record({
