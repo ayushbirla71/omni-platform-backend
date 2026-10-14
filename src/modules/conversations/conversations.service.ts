@@ -97,21 +97,26 @@ export function computeSessionWindow(
 }
 
 /**
- * One non-closed conversation per contact. A closed conversation is never reopened by a new
- * customer message: it stays a finished record and the message starts a new one.
+ * One conversation per contact. A non-closed one is always preferred. With `reuseClosed` (customer
+ * message paths) the contact's latest closed conversation is returned instead of starting a new one;
+ * it is reopened by `reopenOnCustomerMessage` once the message is actually stored, so a retried
+ * webhook for an old message cannot reopen it. Campaign sends leave `reuseClosed` off: a marketing
+ * blast must not reopen a resolved support case.
  */
 export async function findOrCreateOpenConversation(params: {
   tenantId: string;
   contactId: string;
   channelId: string;
+  reuseClosed?: boolean;
 }): Promise<Conversation> {
-  const { tenantId, contactId, channelId } = params;
+  const { tenantId, contactId, channelId, reuseClosed = false } = params;
 
   const existing = await queryOne<Conversation>(
     `SELECT * FROM conversations
-     WHERE contact_id = $1 AND status != 'closed'
-     ORDER BY created_at DESC LIMIT 1`,
-    [contactId]
+     WHERE contact_id = $1 AND tenant_id = $2 AND ($3::boolean OR status != 'closed')
+     ORDER BY (status = 'closed') ASC, COALESCE(last_message_at, created_at) DESC
+     LIMIT 1`,
+    [contactId, tenantId, reuseClosed]
   );
   if (existing) return existing;
 
@@ -521,6 +526,49 @@ export async function markConversationNeedsHuman(
     [conversationId, tenantId]
   );
   if (changed) await emitConversationUpdate(tenantId, conversationId);
+}
+
+/**
+ * A customer wrote to a closed case: reopen that same case instead of starting a new one.
+ * The previous agent and team stay on it, unless that agent is no longer active. Resolution
+ * timestamps are cleared so the case counts as unresolved again until it is closed anew.
+ * Returns true when a closed case was reopened.
+ */
+export async function reopenOnCustomerMessage(
+  tenantId: string,
+  conversationId: string
+): Promise<boolean> {
+  const reopened = await queryOne<{ id: string }>(
+    `UPDATE conversations c
+     SET status = 'open',
+         resolved_at = NULL,
+         resolution_duration_seconds = NULL,
+         assigned_agent_id = CASE
+           WHEN EXISTS (
+             SELECT 1 FROM users u
+             WHERE u.id = c.assigned_agent_id AND u.tenant_id = c.tenant_id AND u.status = 'active'
+           ) THEN c.assigned_agent_id
+           ELSE NULL END
+     WHERE c.id = $1 AND c.tenant_id = $2 AND c.status = 'closed'
+     RETURNING c.id`,
+    [conversationId, tenantId]
+  );
+  if (!reopened) return false;
+
+  await AuditService.record({
+    tenantId,
+    action: "conversation.reopened_by_customer",
+    resourceType: "conversation",
+    resourceId: conversationId,
+    details: { from: "closed", to: "open" },
+  });
+  emitRealtimeEvent(
+    tenantId,
+    "conversation:status",
+    { conversationId, status: "open" },
+    { conversationId }
+  ).catch((err) => log.warn("Realtime status event failed", { error: err.message }));
+  return true;
 }
 
 /**

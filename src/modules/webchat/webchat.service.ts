@@ -605,6 +605,7 @@ export async function initVisitorSession(params: {
     tenantId,
     contactId: contact.id,
     channelId,
+    reuseClosed: true, // the visitor's first message reopens their closed case
   });
 
   // Issue 30-day signed visitor JWT token

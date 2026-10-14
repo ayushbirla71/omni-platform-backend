@@ -6,6 +6,7 @@ import {
   touchLastInboundAt,
   getConversation,
   claimOnHumanReply,
+  reopenOnCustomerMessage,
 } from "../conversations/conversations.service";
 import { getChannelWithCredentials } from "../channels/channels.service";
 import { getAdapter } from "../channels/channel-registry";
@@ -176,6 +177,11 @@ export async function recordInboundMessage(params: {
   };
   await collection.insertOne(doc);
   await touchLastInboundAt(conversationId, sentAt);
+  // A new (non-duplicate) customer message reopens a closed case; the message is already saved,
+  // so a failure here must not lose it.
+  await reopenOnCustomerMessage(tenantId, conversationId).catch((err) => {
+    console.error("[messages] Could not reopen closed conversation (non-fatal):", err?.message);
+  });
   const message = toMessage(doc);
   emitRealtimeEvent(tenantId, "message:new", message, { conversationId }).catch((err) => {
     console.error("[messages] Realtime event emit failed (non-fatal):", err);
