@@ -12,6 +12,7 @@ import {
 import { advanceFlow, resumeFlowOnDeliveryStatus } from "./flow-engine";
 import { scheduleDelayedFlowResume } from "../jobs/queue.service";
 import { recordCampaignAnswers } from "../campaigns/campaign-answers";
+import { markConversationNeedsHuman } from "../conversations/conversations.service";
 
 export type FlowRunSkipReason = "locked" | "handed_off" | "no_flow" | "flow_unpublished" | "nothing_sent";
 
@@ -157,6 +158,13 @@ export async function runFlowForConversation(params: {
       variables: updatedVariables,
       status: advance.status === "awaiting_delivery" || advance.status === "waiting" ? "running" : advance.status,
     });
+
+    if (advance.status === "handed_off") {
+      // Bot -> human: show the case as "pending" so agents see it needs a person.
+      await markConversationNeedsHuman(tenantId, conversationId).catch((err) => {
+        console.error(`[flow-engine] could not mark conversation ${conversationId} as pending:`, err);
+      });
+    }
 
     if (flowRun.campaign_id && flowRun.campaign_recipient_id && advance.answers?.length) {
       // Best effort: a failed export record must never break the live conversation.

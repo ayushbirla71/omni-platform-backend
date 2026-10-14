@@ -1,7 +1,12 @@
 import { v4 as uuidv4 } from "uuid";
 import { getMongoDb } from "../../db/mongo";
 import { query, queryOne } from "../../db/pool";
-import { touchLastMessageAt, touchLastInboundAt, getConversation } from "../conversations/conversations.service";
+import {
+  touchLastMessageAt,
+  touchLastInboundAt,
+  getConversation,
+  claimOnHumanReply,
+} from "../conversations/conversations.service";
 import { getChannelWithCredentials } from "../channels/channels.service";
 import { getAdapter } from "../channels/channel-registry";
 import { getMediaDownloadUrl } from "../../db/object-storage";
@@ -335,6 +340,11 @@ export async function sendOutboundMessage(params: {
         [conversationId]
       );
     } catch {}
+
+    // The agent who replies owns an unassigned case, and a pending case becomes open.
+    await claimOnHumanReply(tenantId, conversationId, senderUserId).catch((err) => {
+      console.error("[messages] Could not assign conversation to the replying agent (non-fatal):", err?.message);
+    });
   }
 
   // Update SLA metrics: record first response time if this is the initial outbound message
