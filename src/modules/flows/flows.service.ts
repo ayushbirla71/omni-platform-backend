@@ -20,6 +20,9 @@ export interface FlowRun {
   current_node_id: string | null;
   variables: Record<string, any>;
   status: "running" | "completed" | "handed_off";
+  /** Set when the run was started by a campaign; answers are then recorded per recipient. */
+  campaign_id: string | null;
+  campaign_recipient_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -119,12 +122,28 @@ export async function getLatestFlowRun(conversationId: string): Promise<FlowRun 
 export async function createFlowRun(params: {
   conversationId: string;
   flowId: string;
+  campaignId?: string;
+  campaignRecipientId?: string;
 }): Promise<FlowRun> {
   const row = await queryOne<FlowRun>(
-    `INSERT INTO flow_runs (conversation_id, flow_id) VALUES ($1, $2) RETURNING *`,
-    [params.conversationId, params.flowId]
+    `INSERT INTO flow_runs (conversation_id, flow_id, campaign_id, campaign_recipient_id)
+     VALUES ($1, $2, $3, $4) RETURNING *`,
+    [params.conversationId, params.flowId, params.campaignId ?? null, params.campaignRecipientId ?? null]
   );
   return row!;
+}
+
+/** Attributes an already-running run to a campaign recipient, unless it already has one. */
+export async function attachFlowRunToCampaign(
+  flowRunId: string,
+  campaignId: string,
+  campaignRecipientId: string
+): Promise<void> {
+  await query(
+    `UPDATE flow_runs SET campaign_id = $2, campaign_recipient_id = $3, updated_at = now()
+     WHERE id = $1 AND campaign_id IS NULL`,
+    [flowRunId, campaignId, campaignRecipientId]
+  );
 }
 
 export async function updateFlowRun(

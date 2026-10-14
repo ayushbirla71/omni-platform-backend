@@ -10,6 +10,14 @@ import {
   getCampaignAnalytics,
 } from "./campaigns.service";
 import { sendBroadcastNow } from "./campaign-sender";
+import {
+  getCampaignExportData,
+  buildCampaignExportWorkbook,
+  campaignExportFileName,
+} from "./campaign-export";
+import { AuditService } from "../audit/audit.service";
+
+const XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 export const campaignsRouter = Router();
 campaignsRouter.use(requireAuth);
@@ -50,6 +58,35 @@ campaignsRouter.get(
       offset: offset ? parseInt(offset as string, 10) : 0,
     });
     res.json(recipients);
+  })
+);
+
+/** Excel export: one row per recipient with delivery status and the flow questions they answered. */
+campaignsRouter.get(
+  "/:id/export",
+  requireRole("owner", "admin"),
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const { tenantId, userId, email } = req.auth!;
+    const data = await getCampaignExportData(tenantId, req.params.id);
+    if (!data) return res.sendStatus(404);
+
+    const file = buildCampaignExportWorkbook(data);
+
+    await AuditService.record({
+      tenantId,
+      userId,
+      userEmail: email,
+      action: "campaign.export",
+      resourceType: "campaign",
+      resourceId: req.params.id,
+      details: { recipients: data.rows.length, questions: data.columns.length },
+      ipAddress: req.ip,
+    });
+
+    res.setHeader("Content-Type", XLSX_CONTENT_TYPE);
+    res.setHeader("Content-Disposition", `attachment; filename="${campaignExportFileName(data.campaignName)}"`);
+    res.setHeader("Cache-Control", "no-store");
+    res.send(file);
   })
 );
 

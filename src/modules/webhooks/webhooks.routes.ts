@@ -193,6 +193,7 @@ async function processInboundWebhook(
       tenantId: channel.tenant_id,
       contactId: contact.id,
       channelId: channel.id,
+      reuseClosed: true, // a customer message reopens their closed case (see recordInboundMessage)
     });
 
     let storedMediaKey: string | undefined;

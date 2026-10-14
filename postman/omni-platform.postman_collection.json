@@ -821,6 +821,154 @@
               }
             }
           ]
+        },
+        {
+          "name": "Unassign Conversation",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/{{conversationId}}/assign",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "conversations", "{{conversationId}}", "assign"]
+            },
+            "description": "Owner/admin/agent only. agentUserId: null unassigns. The assignee must be an active owner/admin/agent of the same workspace.",
+            "body": { "mode": "raw", "raw": "{\n  \"agentUserId\": null\n}" }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('Status 204', () => pm.response.code === 204);"] }
+            }
+          ]
+        },
+        {
+          "name": "Claim Conversation",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/{{conversationId}}/claim",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "conversations", "{{conversationId}}", "claim"]
+            },
+            "description": "Take an unassigned case for yourself (a pending case becomes open). 409 if another agent holds it or the case is closed."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('Status 204 or 409', () => [204, 409].includes(pm.response.code));"] }
+            }
+          ]
+        },
+        {
+          "name": "Assign Conversation to Team",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/{{conversationId}}/team",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "conversations", "{{conversationId}}", "team"]
+            },
+            "description": "Owner/admin/agent only. teamId: null clears the team.",
+            "body": { "mode": "raw", "raw": "{\n  \"teamId\": \"{{teamId}}\"\n}" }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('Status 204', () => pm.response.code === 204);"] }
+            }
+          ]
+        },
+        {
+          "name": "Close / Reopen Conversation",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/{{conversationId}}/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "conversations", "{{conversationId}}", "status"]
+            },
+            "description": "status: open | pending | closed. Closing stamps resolved_at; reopening (open/pending) clears it. Owner/admin/agent only.",
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"closed\"\n}" }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('Status 204', () => pm.response.code === 204);"] }
+            }
+          ]
+        },
+        {
+          "name": "List My Open Conversations (filters)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations?status=open&assignedTo=me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "conversations"],
+              "query": [
+                { "key": "status", "value": "open", "description": "open | pending | closed" },
+                { "key": "assignedTo", "value": "me", "description": "me | unassigned | <user id>" },
+                { "key": "teamId", "value": "", "description": "<team id>", "disabled": true }
+              ]
+            },
+            "description": "Server-side inbox filters. Each conversation includes assignedAgentName, assignedTeamId and assignedTeamName."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["pm.test('Status 200', () => pm.response.code === 200);"] }
+            }
+          ]
+        },
+        {
+          "name": "Create Support Team",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/teams",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "teams"]
+            },
+            "description": "Owner/admin only. Other endpoints: GET /api/teams (any role), PATCH /api/teams/:id, DELETE /api/teams/:id, PUT /api/teams/:id/members { userIds: [...] }.",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Support\"\n}" }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.code === 201);",
+                  "const data = pm.response.json();",
+                  "if (data.id) pm.collectionVariables.set('teamId', data.id);"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -1391,6 +1539,44 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('Status 200', () => pm.response.code === 200);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Export Campaign Responses (Excel)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/campaigns/{{campaignId}}/export",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "campaigns",
+                "{{campaignId}}",
+                "export"
+              ]
+            },
+            "description": "Owner/admin only. Returns an .xlsx file: one row per recipient with delivery status and one column per flow question / template-button answer. Only answers given after this feature was deployed are included."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.code === 200);",
+                  "pm.test('Is xlsx', () => pm.response.headers.get('Content-Type').includes('spreadsheetml'));"
                 ]
               }
             }

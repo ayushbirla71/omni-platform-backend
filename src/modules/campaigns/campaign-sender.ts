@@ -117,6 +117,7 @@ export async function sendBroadcastNow(
             tenantId,
             conversationId: conversation.id,
             defaultFlowId: flowId,
+            campaign: { campaignId, recipientId: recipient.id },
           });
 
           if (outcome.status === "skipped") {
